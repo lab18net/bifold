@@ -1,0 +1,22 @@
+[package]
+name = "bifold-tui"
+description = "Bifold terminal user interface (two-pane file manager)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "bifold"
+path = "src/main.rs"
+
+[dependencies]
+bifold-core = { workspace = true }
+crossterm = "0.29.0"
+ratatui = "0.30.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"

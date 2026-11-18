@@ -1,0 +1,21 @@
+[package]
+name = "bifold-gui"
+description = "Bifold desktop application (two-pane file manager)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "bifold-gui"
+path = "src/main.rs"
+
+[dependencies]
+bifold-core = { workspace = true }
+eframe = "0.33.3"
+
+[dev-dependencies]
+tempfile = "3.27.0"
