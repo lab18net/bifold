@@ -74,7 +74,11 @@ for page in man/bifold.1 man/bifold-gui.1; do
     check "$page exists" test -f "$page"
 done
 if command -v mandoc >/dev/null 2>&1; then
-    check "man pages lint clean (mandoc)" mandoc -Tlint -Wwarning man/bifold.1 man/bifold-gui.1
+    # Only real errors fail here: mandoc versions differ in which style warnings they
+    # raise (`make man-lint` is the strict, local check). Output is shown either way.
+    if lint="$(mandoc -Tlint -Werror man/bifold.1 man/bifold-gui.1 2>&1)"; then ok "man pages have no mandoc errors"
+    else fail "man pages have mandoc errors"; printf '%s\n' "$lint"; fi
+    [ -z "$lint" ] || printf '%s\n' "$lint"
 else
     ok "mandoc not installed, man lint skipped"
 fi
