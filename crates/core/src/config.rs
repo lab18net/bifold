@@ -41,6 +41,10 @@ pub struct Config {
     pub previewer: String,
     /// Kill the previewer after this many milliseconds.
     pub previewer_timeout_ms: u64,
+    /// Enter on an executable opens an editable run line instead of the viewer.
+    pub run_executables: bool,
+    /// How long the desktop waits for a command before leaving it running.
+    pub run_timeout_ms: u64,
     /// Colour theme: a built-in (`bifold`, `terminal`, `nord`, `gruvbox`,
     /// `gruvbox-light`, `solarized`, `solarized-light`) or a file in `themes/`.
     pub theme: String,
@@ -71,6 +75,8 @@ impl Default for Config {
             show_permissions: false,
             previewer: String::new(),
             previewer_timeout_ms: 3000,
+            run_executables: true,
+            run_timeout_ms: 10_000,
             theme: theme::DEFAULT_THEME.to_string(),
             keys: BTreeMap::new(),
             viewer_keys: BTreeMap::new(),

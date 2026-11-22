@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 chrono = "0.4.45"
+libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.2.1"
 

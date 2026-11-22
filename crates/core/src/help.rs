@@ -109,6 +109,7 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
         key(map, &[A::Delete], 1, "delete (to the trash)"),
         key(map, &[A::MkDir, A::NewFile], 1, "new folder / new file"),
         key(map, &[A::Rename], 1, "rename"),
+        key(map, &[A::LastOutput], 1, "output of the last run command"),
         heading("Look"),
         key(
             map,
@@ -142,6 +143,10 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
         ),
         note(
             "Mark entries to act on several at once; without marks, actions use the entry under the cursor.",
+        ),
+        heading("Running programs"),
+        note(
+            "Enter on an executable shows an editable run line (./name). Edit it, Enter runs it in this folder.",
         ),
         heading("Safety"),
         note(

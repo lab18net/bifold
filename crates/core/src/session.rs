@@ -41,6 +41,8 @@ pub struct Session {
     pub themes_dir: Option<PathBuf>,
     /// Last status-line message (result of the previous operation).
     pub message: Option<String>,
+    /// The last command run from the file list, with its output (`Ctrl+O`).
+    pub last_run: Option<crate::runcmd::RunOutcome>,
 }
 
 impl Session {
@@ -65,6 +67,7 @@ impl Session {
             theme,
             themes_dir,
             message: (!warnings.is_empty()).then(|| format!("config: {}", warnings.join("; "))),
+            last_run: None,
         };
         session.apply_preferences();
         session
@@ -107,6 +110,33 @@ impl Session {
             themes: self.theme_names(),
         };
         crate::help::pages(&self.keymap, &ctx)
+    }
+
+    /// The last run command as viewer content, or `None` before any run.
+    pub fn last_run_preview(&self) -> Option<Preview> {
+        let run = self.last_run.as_ref()?;
+        Some(Preview::from_output(
+            &format!("$ {}", run.command),
+            &run.cwd,
+            &run.output,
+            run.truncated,
+            Some(run.summary()),
+        ))
+    }
+
+    pub fn run_suggestion(&self) -> Option<String> {
+        if !self.config.run_executables {
+            return None;
+        }
+        let entry = self.pane().cursor_entry()?;
+        entry
+            .is_executable()
+            .then(|| crate::runcmd::command_for(&entry.name))
+    }
+
+    /// How long the desktop waits for a run command before detaching.
+    pub fn run_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.config.run_timeout_ms.max(1))
     }
 
     pub fn theme_names(&self) -> Vec<String> {
@@ -612,6 +642,7 @@ mod tests {
             Action::View,
             Action::Help,
             Action::Open,
+            Action::LastOutput,
         ] {
             assert!(!session.apply(ui_action, 10), "{ui_action:?}");
         }
@@ -740,6 +771,64 @@ mod tests {
             session.status().contains("nonsense"),
             "{}",
             session.status()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_suggestion_only_for_executable_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = fixture();
+        let left = dir.path().join("left");
+        let script = left.join("my script.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(left.join("zdir")).unwrap();
+        let mut session = Session::new_at(&left, &dir.path().join("right"));
+
+        let at = |s: &Session, name: &str| {
+            s.pane()
+                .entries
+                .iter()
+                .position(|e| e.name == name)
+                .unwrap()
+        };
+        session.pane_mut().cursor = at(&session, "my script.sh");
+        assert_eq!(
+            session.run_suggestion().as_deref(),
+            Some("'./my script.sh'")
+        );
+        session.pane_mut().cursor = at(&session, "a.txt");
+        assert_eq!(session.run_suggestion(), None, "plain file");
+        session.pane_mut().cursor = at(&session, "zdir");
+        assert_eq!(session.run_suggestion(), None, "folder");
+
+        session.pane_mut().cursor = at(&session, "my script.sh");
+        session.config.run_executables = false;
+        assert_eq!(session.run_suggestion(), None, "switched off in config");
+        session.config.run_timeout_ms = 250;
+        assert_eq!(session.run_timeout().as_millis(), 250);
+    }
+
+    #[test]
+    fn last_run_becomes_a_viewer_preview_only_once_something_ran() {
+        let dir = fixture();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        assert!(session.last_run_preview().is_none(), "nothing ran yet");
+
+        session.last_run = Some(
+            crate::runcmd::run_captured(
+                "echo hi; exit 2",
+                &dir.path().join("left"),
+                crate::runcmd::DEFAULT_TIMEOUT,
+            )
+            .unwrap(),
+        );
+        let preview = session.last_run_preview().unwrap();
+        assert_eq!(preview.plain_lines(), ["hi"]);
+        assert_eq!(
+            preview.title(),
+            "$ echo hi; exit 2  [output]  (ran: echo hi; exit 2 — exit 2)"
         );
     }
 }

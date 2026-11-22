@@ -15,6 +15,7 @@ pub mod job;
 pub mod keys;
 pub mod pane;
 pub mod preview;
+pub mod runcmd;
 pub mod session;
 pub mod sort;
 pub mod style;

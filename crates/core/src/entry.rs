@@ -106,6 +106,11 @@ impl Entry {
         self.kind == EntryKind::Dir
     }
 
+    /// A regular file with an execute bit — what Enter offers to run.
+    pub fn is_executable(&self) -> bool {
+        self.kind == EntryKind::File && self.mode.is_some_and(|mode| mode & 0o111 != 0)
+    }
+
     pub fn hidden(&self) -> bool {
         self.name.starts_with('.')
     }
@@ -199,5 +204,29 @@ mod tests {
         };
         assert!(e.hidden());
         assert!(!e.is_dir());
+    }
+
+    #[test]
+    fn executables_are_regular_files_with_an_execute_bit() {
+        let mut e = Entry {
+            name: "run.sh".into(),
+            path: PathBuf::from("/x/run.sh"),
+            kind: EntryKind::File,
+            size: 1,
+            modified: None,
+            mode: Some(0o100755),
+            symlink: false,
+        };
+        assert!(e.is_executable());
+        e.mode = Some(0o100644);
+        assert!(!e.is_executable());
+        e.mode = Some(0o100700);
+        assert!(e.is_executable(), "owner-only counts");
+        e.mode = Some(0o040755);
+        e.kind = EntryKind::Dir;
+        assert!(!e.is_executable(), "folders are entered, not run");
+        e.kind = EntryKind::File;
+        e.mode = None;
+        assert!(!e.is_executable());
     }
 }

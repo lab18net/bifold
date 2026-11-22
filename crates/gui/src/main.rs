@@ -3,6 +3,7 @@
 //! Same [`Session`] as the terminal build; only the rendering differs.
 
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use bifold_core::config::Config;
@@ -234,6 +235,8 @@ enum DialogKind {
     MoveTo,
     GoTo,
     Filter,
+    /// Command line run in the active folder (Enter on an executable).
+    Run,
     Delete {
         targets: Vec<PathBuf>,
         mode: DeleteMode,
@@ -250,6 +253,7 @@ impl DialogKind {
             Self::MoveTo => "Move to".into(),
             Self::GoTo => "Go to directory".into(),
             Self::Filter => "Filter".into(),
+            Self::Run => "Run".into(),
             Self::Delete { targets, mode } => format!(
                 "{} {} item(s)",
                 if *mode == DeleteMode::Permanent {
@@ -268,6 +272,7 @@ impl DialogKind {
             Self::CopyTo | Self::MoveTo => "destination",
             Self::GoTo => "path",
             Self::Filter => "pattern",
+            Self::Run => "command (runs in the active folder)",
             Self::Delete { .. } => "",
         }
     }
@@ -275,6 +280,10 @@ impl DialogKind {
     fn needs_text(&self) -> bool {
         !matches!(self, Self::Delete { .. })
     }
+}
+
+struct RunningCommand {
+    result: Receiver<bifold_core::error::Result<bifold_core::runcmd::RunOutcome>>,
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +333,8 @@ struct GuiApp {
     applied_theme: Option<String>,
     dialog: Option<Dialog>,
     viewer: Option<ViewerState>,
+    /// A command running in the background: its text and where the result arrives.
+    running: Option<RunningCommand>,
     help: bool,
     help_tab: usize,
     /// The toolbar filter box has keyboard focus: let it have the keys.
@@ -341,6 +352,7 @@ impl GuiApp {
             applied_theme: None,
             session,
             dialog: None,
+            running: None,
             viewer: None,
             help: false,
             help_tab: 0,
@@ -379,6 +391,7 @@ impl GuiApp {
             self.reveal = [true; 2];
         }
 
+        self.poll_running(ctx);
         self.shortcuts(ctx);
         self.sync_theme(ctx);
 
@@ -893,6 +906,15 @@ impl GuiApp {
                 }
                 Err(err) => Err(err),
             },
+            DialogKind::Run => {
+                if value.is_empty() {
+                    Err(bifold_core::error::Error::invalid(
+                        "command cannot be empty",
+                    ))
+                } else {
+                    self.start_command(value)
+                }
+            }
             DialogKind::Delete { targets, mode } => self.session.start_delete(&targets, mode),
         };
 
@@ -900,6 +922,54 @@ impl GuiApp {
             Ok(()) => self.reveal = [true; 2],
             Err(err) => self.session.message = Some(format!("error: {err}")),
         }
+    }
+
+    /// Run `command` in the active folder on a worker thread, so the window
+    /// stays responsive; `poll_running` picks the result up.
+    fn start_command(&mut self, command: String) -> bifold_core::error::Result<()> {
+        if self.running.is_some() {
+            return Err(bifold_core::error::Error::invalid(
+                "a command is already running",
+            ));
+        }
+        let cwd = self.session.panes[self.session.active].path.clone();
+        let timeout = self.session.run_timeout();
+        let (tx, rx) = mpsc::channel();
+        let (cmd, dir) = (command.clone(), cwd.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(bifold_core::runcmd::run_captured(&cmd, &dir, timeout));
+        });
+        self.session.message = Some(format!("running: {command}"));
+        self.running = Some(RunningCommand { result: rx });
+        Ok(())
+    }
+
+    fn poll_running(&mut self, ctx: &egui::Context) {
+        let Some(running) = &self.running else {
+            return;
+        };
+        let outcome = match running.result.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(80));
+                return;
+            }
+            Err(TryRecvError::Disconnected) => Err(bifold_core::error::Error::invalid(
+                "the command runner stopped unexpectedly",
+            )),
+        };
+        self.running = None;
+        match outcome {
+            Ok(out) => {
+                self.session.message = Some(out.summary());
+                self.session.last_run = Some(out);
+                self.show_last_output();
+            }
+            Err(err) => self.session.message = Some(format!("error: {err}")),
+        }
+        // The command probably changed the folder it ran in.
+        self.session.reload_all();
+        self.reveal = [true; 2];
     }
 
     fn show_viewer(&mut self, ctx: &egui::Context) {
@@ -918,9 +988,10 @@ impl GuiApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let is_hex = viewer.preview.kind == PreviewKind::Hex;
-                    if ui
-                        .small_button(if is_hex { "text" } else { "hex" })
-                        .clicked()
+                    if viewer.preview.kind != PreviewKind::Output
+                        && ui
+                            .small_button(if is_hex { "text" } else { "hex" })
+                            .clicked()
                     {
                         toggle_hex = true;
                     }
@@ -1124,8 +1195,24 @@ impl GuiApp {
                 Ok(_) => self.reveal[side] = true,
                 Err(err) => self.session.message = Some(format!("error: {err}")),
             }
+        } else if let Some(command) = self.session.run_suggestion() {
+            self.dialog = Some(Dialog {
+                kind: DialogKind::Run,
+                text: command,
+            });
         } else {
             self.show_file(&entry.path, false);
+        }
+    }
+
+    /// Ctrl+O: the output of the last command run from the file list.
+    fn show_last_output(&mut self) {
+        match self.session.last_run_preview() {
+            Some(preview) => self.viewer = Some(ViewerState::new(preview)),
+            None => {
+                self.session.message =
+                    Some("no command has been run yet (Enter on an executable runs one)".into());
+            }
         }
     }
 
@@ -1164,6 +1251,8 @@ impl GuiApp {
             ViewerAction::Bottom => viewer.jump = Some(last),
             // Lines scroll horizontally on the desktop; wrapping is a terminal-only option.
             ViewerAction::ToggleWrap => {}
+            // Command output has no file behind it to re-read as hex.
+            ViewerAction::ToggleHex if viewer.preview.kind == PreviewKind::Output => {}
             ViewerAction::ToggleHex => {
                 let want_hex = viewer.preview.kind != PreviewKind::Hex;
                 let path = viewer.preview.path.clone();
@@ -1189,6 +1278,7 @@ impl GuiApp {
             Action::Open => self.open_cursor(),
             Action::View => self.view_cursor(false),
             Action::ViewHex => self.view_cursor(true),
+            Action::LastOutput => self.show_last_output(),
             Action::Rename => self.begin_rename(),
             Action::Copy => self.begin_transfer(DialogKind::CopyTo),
             Action::Move => self.begin_transfer(DialogKind::MoveTo),
@@ -1798,5 +1888,193 @@ mod tests {
         });
         press(&ctx, &mut app, egui::Key::H, egui::Modifiers::NONE);
         assert!(!app.help, "a dialog has the keyboard");
+    }
+
+    #[cfg(unix)]
+    fn script_fixture() -> (tempfile::TempDir, GuiApp) {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut app) = fixture();
+        let script = dir.path().join("left/hello.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\necho from-script \"$1\"\necho oops 1>&2\nexit 2\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        app.session.reload_all();
+        let at = app.session.panes[LEFT]
+            .entries
+            .iter()
+            .position(|e| e.name == "hello.sh")
+            .unwrap();
+        app.session.panes[LEFT].cursor = at;
+        (dir, app)
+    }
+
+    #[cfg(unix)]
+    fn wait_for_command(app: &mut GuiApp) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.running.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "command never finished"
+            );
+            app.poll_running(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enter_on_an_executable_opens_a_run_dialog_and_shows_the_output() {
+        let (_dir, mut app) = script_fixture();
+        app.open_cursor();
+        let dialog = app.dialog.clone().expect("run dialog");
+        assert!(matches!(dialog.kind, DialogKind::Run));
+        assert_eq!(dialog.text, "./hello.sh");
+        assert!(
+            app.viewer.is_none() && app.running.is_none(),
+            "nothing runs yet"
+        );
+
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "./hello.sh edited".into(),
+        });
+        assert!(app.running.is_some(), "runs in the background");
+        wait_for_command(&mut app);
+
+        let viewer = app.viewer.as_ref().expect("output viewer");
+        assert_eq!(viewer.preview.kind, PreviewKind::Output);
+        assert_eq!(viewer.preview.plain_lines(), ["from-script edited", "oops"]);
+        assert_eq!(
+            viewer.preview.title(),
+            "$ ./hello.sh edited  [output]  (ran: ./hello.sh edited — exit 2)"
+        );
+        assert!(app.session.message.as_deref().unwrap().contains("exit 2"));
+
+        // Hex toggling does not apply: there is no file to re-read.
+        app.run_viewer_action(ViewerAction::ToggleHex);
+        assert_eq!(
+            app.viewer.as_ref().unwrap().preview.kind,
+            PreviewKind::Output
+        );
+        let output = run_frames(&mut app, 2);
+        assert!(!output.shapes.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_second_command_is_refused_while_one_runs() {
+        let (_dir, mut app) = script_fixture();
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "sleep 1".into(),
+        });
+        assert!(app.running.is_some());
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "echo second".into(),
+        });
+        assert!(
+            app.session
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("already running"),
+            "{:?}",
+            app.session.message
+        );
+        wait_for_command(&mut app);
+        assert_eq!(
+            app.viewer.as_ref().unwrap().preview.plain_lines(),
+            ["(no output)"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_a_command_refreshes_the_panes() {
+        let (dir, mut app) = script_fixture();
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "touch made-by-command".into(),
+        });
+        wait_for_command(&mut app);
+        assert!(dir.path().join("left/made-by-command").exists());
+        assert!(
+            app.session.panes[LEFT]
+                .entries
+                .iter()
+                .any(|e| e.name == "made-by-command")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_empty_command_is_refused_and_plain_files_still_open_the_viewer() {
+        let (_dir, mut app) = script_fixture();
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "  ".into(),
+        });
+        assert!(app.running.is_none());
+        assert!(app.session.message.as_deref().unwrap().contains("empty"));
+
+        let at = app.session.panes[LEFT]
+            .entries
+            .iter()
+            .position(|e| e.name == "a.txt")
+            .unwrap();
+        app.session.panes[LEFT].cursor = at;
+        app.open_cursor();
+        assert!(app.dialog.is_none());
+        assert_eq!(
+            app.viewer.as_ref().unwrap().preview.plain_lines(),
+            ["hello"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_run_dialog_renders() {
+        let (_dir, mut app) = script_fixture();
+        app.open_cursor();
+        let output = run_frames(&mut app, 2);
+        assert!(!output.shapes.is_empty());
+        assert!(app.dialog.is_some(), "stays open across frames");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_o_reopens_the_last_output_after_the_viewer_was_closed() {
+        let (_dir, mut app) = script_fixture();
+        let ctx = egui::Context::default();
+        press(&ctx, &mut app, egui::Key::O, egui::Modifiers::CTRL);
+        assert!(app.viewer.is_none());
+        assert!(
+            app.session
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("no command has been run")
+        );
+
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "./hello.sh again".into(),
+        });
+        wait_for_command(&mut app);
+        assert!(
+            app.viewer.is_some(),
+            "output opens when the command finishes"
+        );
+        press(&ctx, &mut app, egui::Key::Q, egui::Modifiers::NONE);
+        assert!(app.viewer.is_none());
+
+        press(&ctx, &mut app, egui::Key::O, egui::Modifiers::CTRL);
+        let viewer = app.viewer.as_ref().expect("Ctrl+O brings it back");
+        assert_eq!(viewer.preview.plain_lines(), ["from-script again", "oops"]);
     }
 }

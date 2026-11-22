@@ -452,12 +452,16 @@ fn draw_viewer(
         viewer.preview.title(),
         human_size(viewer.preview.size)
     );
-    let hint = keymap.viewer_hints(&[
-        (ViewerAction::Up, "scroll"),
-        (ViewerAction::ToggleHex, "hex"),
+    // Command output has no file behind it, so there is no hex view to offer.
+    let mut hints = vec![(ViewerAction::Up, "scroll")];
+    if viewer.preview.kind != bifold_core::preview::PreviewKind::Output {
+        hints.push((ViewerAction::ToggleHex, "hex"));
+    }
+    hints.extend([
         (ViewerAction::ToggleWrap, "wrap"),
         (ViewerAction::Close, "close"),
     ]);
+    let hint = keymap.viewer_hints(&hints);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -897,5 +901,51 @@ mod tests {
         // First content row, first cell: the offset column is the theme's overlay1.
         assert_eq!(buf[(1, 1)].fg, Color::Rgb(100, 110, 130));
         assert_eq!(buf[(1, 1)].bg, Color::Rgb(46, 52, 64));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_run_line_is_drawn_as_a_prompt() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut app) = fixture();
+        let script = dir.path().join("left/go.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        app.session.pane_mut().reload();
+        let at = app
+            .session
+            .pane()
+            .entries
+            .iter()
+            .position(|e| e.name == "go.sh")
+            .unwrap();
+        app.session.pane_mut().cursor = at;
+        app.on_key(key(crossterm::event::KeyCode::Enter));
+        let screen = render(&mut app, 100, 20);
+        assert!(screen.contains("Run in"), "{screen}");
+        assert!(screen.contains("$: ./go.sh"), "{screen}");
+    }
+
+    #[test]
+    fn output_viewer_does_not_offer_hex() {
+        let (dir, mut app) = fixture();
+        app.session.last_run = Some(
+            bifold_core::runcmd::run_captured(
+                "echo hi",
+                dir.path(),
+                bifold_core::runcmd::DEFAULT_TIMEOUT,
+            )
+            .unwrap(),
+        );
+        app.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('o'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        let screen = render(&mut app, 100, 12);
+        assert!(
+            screen.contains("[output]") && screen.contains("close"),
+            "{screen}"
+        );
+        assert!(!screen.contains("x hex"), "{screen}");
     }
 }

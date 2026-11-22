@@ -69,6 +69,12 @@ cargo run -p bifold-gui -- --path ~/src
    colour in a draw path. Semantic colours produced by core (`Color::Faint`,
    `Color::Accent`) go through `Theme::resolve`. Tokens keep herdr's names; a
    `None` token means "terminal default" and needs a fallback on the desktop.
+12. **Commands run through `core::runcmd`.** A front end never spawns a shell
+   itself: the TUI uses `run_in_pty` (after leaving the alternate screen),
+   the GUI uses `run_captured` on a worker thread, and both store the result
+   in `Session::last_run` (viewed with `Ctrl+O`). Output is capped, a slow
+   command is detached rather than killed, and `Session::run_suggestion`
+   decides when Enter offers a run line.
 
 ## Adding a feature
 

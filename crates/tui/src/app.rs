@@ -19,6 +19,8 @@ pub enum PromptKind {
     Rename,
     CopyTo,
     MoveTo,
+    /// Command line to run in the active folder (Enter on an executable).
+    Run,
 }
 
 impl PromptKind {
@@ -31,6 +33,7 @@ impl PromptKind {
             Self::Rename => "Rename",
             Self::CopyTo => "Copy to",
             Self::MoveTo => "Move to",
+            Self::Run => "Run",
         }
     }
 
@@ -40,6 +43,7 @@ impl PromptKind {
             Self::GoTo => "path",
             Self::MkDir | Self::NewFile | Self::Rename => "name",
             Self::CopyTo | Self::MoveTo => "destination",
+            Self::Run => "$",
         }
     }
 }
@@ -92,6 +96,9 @@ pub struct App {
     pub viewport: [usize; 2],
     /// False when started with `--no-config`: leave the config file alone.
     pub persist: bool,
+    /// A command the user confirmed in the run prompt. The event loop owns the
+    /// terminal, so it takes this, suspends the UI and runs it.
+    pub pending_run: Option<(String, PathBuf)>,
 }
 
 impl App {
@@ -102,6 +109,7 @@ impl App {
             should_quit: false,
             viewport: [20, 20],
             persist: true,
+            pending_run: None,
         }
     }
 
@@ -158,6 +166,7 @@ impl App {
             Action::Open => self.open_cursor(),
             Action::View => self.open_viewer(false),
             Action::ViewHex => self.open_viewer(true),
+            Action::LastOutput => self.open_last_output(),
             Action::Rename => self.prompt(PromptKind::Rename, None),
             Action::Copy => self.prompt(PromptKind::CopyTo, None),
             Action::Move => self.prompt(PromptKind::MoveTo, None),
@@ -257,6 +266,7 @@ impl App {
             ViewerAction::Top => viewer.scroll = 0,
             ViewerAction::Bottom => viewer.scroll = max_scroll,
             ViewerAction::ToggleWrap => viewer.wrap = !viewer.wrap,
+            ViewerAction::ToggleHex if viewer.preview.kind == PreviewKind::Output => {}
             ViewerAction::ToggleHex => {
                 let want_hex = viewer.preview.kind != PreviewKind::Hex;
                 let (width, height) = viewer_area();
@@ -334,6 +344,7 @@ impl App {
                     self.session.pane().targets().len()
                 )
             }
+            PromptKind::Run => format!("Run in {}", self.session.pane().path.display()),
             _ => kind.title().to_string(),
         };
         Mode::Prompt(Prompt { kind, value, title })
@@ -357,6 +368,13 @@ impl App {
                     return self.fail("folder name cannot be empty");
                 }
                 self.session.make_dir(&value).map(|_| ())
+            }
+            PromptKind::Run => {
+                if value.is_empty() {
+                    return self.fail("command cannot be empty");
+                }
+                self.pending_run = Some((value, self.session.pane().path.clone()));
+                Ok(())
             }
             PromptKind::NewFile => {
                 if value.is_empty() {
@@ -409,8 +427,23 @@ impl App {
                 self.set_message(format!("error: {err}"));
             }
             Mode::Normal
+        } else if let Some(command) = self.session.run_suggestion() {
+            // Executable: offer an editable run line, like a shell prompt.
+            self.prompt(PromptKind::Run, Some(command))
         } else {
             self.viewer_for(&entry.path, false)
+        }
+    }
+
+    /// Ctrl+O: the output of the last command run from the file list.
+    fn open_last_output(&mut self) -> Mode {
+        match self.session.last_run_preview() {
+            Some(preview) => Mode::Viewer(Viewer {
+                preview,
+                scroll: 0,
+                wrap: false,
+            }),
+            None => self.fail("no command has been run yet (Enter on an executable runs one)"),
         }
     }
 
@@ -799,5 +832,201 @@ mod tests {
             Mode::Prompt(prompt) => assert_eq!(prompt.value, "h"),
             other => panic!("expected the prompt to stay open, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    fn exec_fixture(config: bifold_core::config::Config) -> (tempfile::TempDir, App) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("left")).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        for (name, mode) in [
+            ("run.sh", 0o755),
+            ("my tool.sh", 0o755),
+            ("notes.txt", 0o644),
+        ] {
+            let path = dir.path().join("left").join(name);
+            fs::write(&path, "#!/bin/sh\necho hi\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let mut session = Session::with_themes_dir(config, None);
+        let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
+        (dir, App::new(session))
+    }
+
+    #[cfg(unix)]
+    fn cursor_to(app: &mut App, name: &str) {
+        let at = app
+            .session
+            .pane()
+            .entries
+            .iter()
+            .position(|e| e.name == name)
+            .unwrap();
+        app.session.pane_mut().cursor = at;
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enter_on_an_executable_shows_an_editable_run_line() {
+        let (dir, mut app) = exec_fixture(Default::default());
+        cursor_to(&mut app, "run.sh");
+        app.on_key(key(KeyCode::Enter));
+        match &app.mode {
+            Mode::Prompt(prompt) => {
+                assert_eq!(prompt.kind, PromptKind::Run);
+                assert_eq!(prompt.value, "./run.sh");
+                assert!(prompt.title.starts_with("Run in "), "{}", prompt.title);
+            }
+            other => panic!("expected the run line, got {other:?}"),
+        }
+        assert!(
+            app.pending_run.is_none(),
+            "nothing runs until Enter confirms"
+        );
+
+        for ch in " --fast".chars() {
+            app.on_key(key(KeyCode::Char(ch)));
+        }
+        app.on_key(key(KeyCode::Backspace));
+        app.on_key(key(KeyCode::Char('t')));
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Normal));
+        let (command, cwd) = app.pending_run.take().expect("queued for the event loop");
+        assert_eq!(command, "./run.sh --fast");
+        assert_eq!(cwd, fs::canonicalize(dir.path().join("left")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escape_cancels_the_run_line_and_odd_names_are_quoted() {
+        let (_dir, mut app) = exec_fixture(Default::default());
+        cursor_to(&mut app, "my tool.sh");
+        app.on_key(key(KeyCode::Right));
+        match &app.mode {
+            Mode::Prompt(prompt) => assert_eq!(prompt.value, "'./my tool.sh'"),
+            other => panic!("{other:?}"),
+        }
+        app.on_key(key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.pending_run.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_empty_run_line_is_refused() {
+        let (_dir, mut app) = exec_fixture(Default::default());
+        cursor_to(&mut app, "run.sh");
+        app.on_key(key(KeyCode::Enter));
+        for _ in 0.."./run.sh".len() {
+            app.on_key(key(KeyCode::Backspace));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.pending_run.is_none());
+        assert!(
+            app.session.status().contains("empty"),
+            "{}",
+            app.session.status()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plain_files_and_disabled_runs_still_open_the_viewer() {
+        let (_dir, mut app) = exec_fixture(Default::default());
+        cursor_to(&mut app, "notes.txt");
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Viewer(_)), "not executable");
+
+        let config = bifold_core::config::Config {
+            run_executables: false,
+            ..Default::default()
+        };
+        let (_dir, mut app) = exec_fixture(config);
+        cursor_to(&mut app, "run.sh");
+        app.on_key(key(KeyCode::Enter));
+        assert!(
+            matches!(app.mode, Mode::Viewer(_)),
+            "run_executables = false"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn f3_still_views_an_executable() {
+        let (_dir, mut app) = exec_fixture(Default::default());
+        cursor_to(&mut app, "run.sh");
+        app.on_key(key(KeyCode::F(3)));
+        assert!(matches!(app.mode, Mode::Viewer(_)));
+    }
+
+    fn ctrl(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), crossterm::event::KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn ctrl_o_without_a_previous_run_says_so() {
+        let (_dir, mut app) = fixture();
+        app.on_key(ctrl('o'));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(
+            app.session.status().contains("no command has been run"),
+            "{}",
+            app.session.status()
+        );
+    }
+
+    #[test]
+    fn ctrl_o_shows_the_last_output_and_q_closes_it() {
+        let (dir, mut app) = fixture();
+        app.session.last_run = Some(
+            bifold_core::runcmd::run_captured(
+                "echo first; echo second",
+                dir.path(),
+                bifold_core::runcmd::DEFAULT_TIMEOUT,
+            )
+            .unwrap(),
+        );
+        app.on_key(ctrl('o'));
+        match &app.mode {
+            Mode::Viewer(viewer) => {
+                assert_eq!(viewer.preview.plain_lines(), ["first", "second"]);
+                assert!(
+                    viewer
+                        .preview
+                        .title()
+                        .starts_with("$ echo first; echo second")
+                );
+            }
+            other => panic!("expected the viewer, got {other:?}"),
+        }
+        app.on_key(key(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn ctrl_o_can_be_rebound() {
+        let mut config = bifold_core::config::Config::default();
+        config.keys.insert("ctrl+o".into(), "none".into());
+        config.keys.insert("O".into(), "last_output".into());
+        let (_dir, mut app) = {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join("left")).unwrap();
+            fs::create_dir(dir.path().join("right")).unwrap();
+            let mut session = Session::with_themes_dir(config, None);
+            let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
+            (dir, App::new(session))
+        };
+        app.on_key(ctrl('o'));
+        assert!(
+            app.session.status().is_empty() || !app.session.status().contains("no command"),
+            "ctrl+o is unbound now"
+        );
+        app.on_key(key(KeyCode::Char('O')));
+        assert!(
+            app.session.status().contains("no command has been run"),
+            "{}",
+            app.session.status()
+        );
     }
 }

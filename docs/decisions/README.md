@@ -9,3 +9,4 @@ Every significant architecture decision is recorded in its own file named
 | [ADR-002](ADR-002-shared-core.md) | One core, two front ends | accepted |
 | [ADR-003](ADR-003-viewer-and-keymap.md) | lf-style viewer and a configurable keymap | accepted |
 | [ADR-004](ADR-004-themes.md) | Themes: herdr palettes and user theme files | accepted |
+| [ADR-005](ADR-005-running-programs.md) | Running programs: Enter on an executable shows a run line | accepted |

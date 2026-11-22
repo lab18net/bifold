@@ -34,6 +34,8 @@ pub enum PreviewKind {
     Hex,
     /// Produced by the configured previewer command.
     External,
+    /// Output of a command the user ran (not a file's content).
+    Output,
 }
 
 #[derive(Debug, Clone)]
@@ -47,19 +49,52 @@ pub struct Preview {
     pub truncated: bool,
     /// Why the requested mode was not used (e.g. previewer failed).
     pub notice: Option<String>,
+    /// Shown instead of the file name (command output has no file).
+    pub title_override: Option<String>,
 }
 
 impl Preview {
+    /// Wrap the output of a command as viewer content. `cwd` is only a placeholder path.
+    pub fn from_output(
+        label: &str,
+        cwd: &Path,
+        text: &str,
+        truncated: bool,
+        notice: Option<String>,
+    ) -> Self {
+        let mut lines = parse_ansi(text);
+        if lines.len() > 1 && lines.last().is_some_and(|l| l.spans.is_empty()) {
+            lines.pop(); // the newline that ends the last line
+        }
+        let cut = lines.len() > MAX_LINES;
+        lines.truncate(MAX_LINES);
+        if text.is_empty() {
+            lines = vec![StyledLine::plain_text("(no output)")];
+        }
+        Self {
+            path: cwd.to_path_buf(),
+            lines,
+            size: text.len() as u64,
+            modified: None,
+            kind: PreviewKind::Output,
+            truncated: truncated || cut,
+            notice,
+            title_override: Some(label.to_string()),
+        }
+    }
+
     pub fn title(&self) -> String {
-        let mut title = self
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.display().to_string());
+        let mut title = self.title_override.clone().unwrap_or_else(|| {
+            self.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.path.display().to_string())
+        });
         match self.kind {
             PreviewKind::Text => {}
             PreviewKind::Hex => title.push_str("  [hex]"),
             PreviewKind::External => title.push_str("  [previewer]"),
+            PreviewKind::Output => title.push_str("  [output]"),
         }
         if self.truncated {
             title.push_str("  [truncated]");
@@ -125,6 +160,7 @@ pub fn load(path: &Path, options: &PreviewOptions) -> Result<Preview> {
         kind: PreviewKind::Text,
         truncated: false,
         notice: None,
+        title_override: None,
     };
 
     if !options.force_hex
@@ -476,5 +512,24 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert_eq!(preview.kind, PreviewKind::Text);
         assert!(preview.notice.unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn command_output_becomes_a_titled_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Preview::from_output(
+            "$ ./run.sh",
+            dir.path(),
+            "\x1b[32mok\x1b[0m\nsecond\n",
+            false,
+            Some("exit 0".into()),
+        );
+        assert_eq!(p.kind, PreviewKind::Output);
+        assert_eq!(p.plain_lines(), ["ok", "second"], "no phantom last line");
+        assert_eq!(p.lines[0].spans[0].fg, Some(Color::Indexed(2)));
+        assert_eq!(p.title(), "$ ./run.sh  [output]  (exit 0)");
+
+        let empty = Preview::from_output("$ true", dir.path(), "", false, None);
+        assert_eq!(empty.plain_lines(), ["(no output)"]);
     }
 }

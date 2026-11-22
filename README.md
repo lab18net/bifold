@@ -62,13 +62,14 @@ cargo build --release
 
 | Key | Action | Key | Action |
 |---|---|---|---|
-| `Tab` | switch pane | `Enter` / `→` / `l` | enter folder, view file |
+| `Tab` | switch pane | `Enter` / `→` / `l` | enter folder, view file, or run line for an executable |
 | `↑` `↓` / `j` `k` | move cursor | `←` / `Backspace` | parent folder |
 | `PgUp` `PgDn` `Home` `End` | jump | `Space` / `Insert` | mark and step down |
 | `F2` | rename | `F3` / `F4` | view file / hex dump |
 | `F5` | copy to other pane | `F6` | move to other pane |
 | `F7` | new folder | `F8` | delete |
 | `Ctrl+N` | new file | `Ctrl+A` / `Ctrl+D` | mark all / clear marks |
+| `Ctrl+O` | output of the last run command | | |
 | `.` | hidden files | `s` / `o` | cycle sort key / flip order |
 | `/` | filter | `g` | go to path |
 | `r` | refresh | `b` / `f` | back / forward |
@@ -117,6 +118,8 @@ confirm_delete = true
 editor = ""
 show_permissions = false
 theme = "bifold"       # see Themes below
+run_executables = true # Enter on an executable shows a run line
+run_timeout_ms = 10000 # desktop: leave a still-running command after this long
 ```
 
 `--no-config` starts from defaults and writes nothing.
@@ -144,7 +147,7 @@ backspace delete insert up down left right home end pageup pagedown f1`…`f24`
 Actions (`[keys]`): `quit switch_pane up down page_up page_down home end open
 parent back forward toggle_mark mark_all clear_marks view view_hex rename copy
 move mkdir new_file delete toggle_hidden cycle_sort toggle_sort_order filter
-goto refresh help cancel cycle_theme`.
+goto refresh help cancel cycle_theme last_output`.
 Actions (`[viewer_keys]`): `close up down page_up page_down top bottom
 toggle_wrap toggle_hex`.
 
@@ -182,6 +185,29 @@ case "$(file --mime-encoding -b "$1")" in
   *)      bat --color=always --style=plain --paging=never "$1" ;;
 esac
 ```
+
+### Running programs
+
+`Enter` on an executable file (any execute bit) opens an editable **run line**
+pre-filled with `./name` — add arguments, press `Enter` to run, `Esc` to
+cancel. It runs through `sh -c` in the active pane's folder. `F3`/`F4` still
+view the file, and `run_executables = false` makes `Enter` view it as before.
+
+- **Terminal:** Bifold steps aside and runs the program on a pseudo-terminal
+  wired to your real one: it sees a real tty (colours, prompts, full-screen
+  programs work) and `Ctrl+C` stops the program, not Bifold. Everything it
+  prints is also recorded. After it exits you see its exit code and press
+  `Enter` to come back; both panes are reloaded. The window size is taken when
+  the command starts (resizing mid-run is not forwarded).
+- **Desktop:** the command runs in the background (no stdin), and its output
+  and exit code open in the viewer. If it is still running after
+  `run_timeout_ms` it is left running and the output so far is shown. One
+  command at a time.
+
+**`Ctrl+O`** (action `last_output`) opens the output of the last command run
+this session in the viewer, in either front end — handy after the terminal
+has switched back to the file list. Colours are kept; carriage-return progress
+bars show only their final state. Output is capped at 4 MiB.
 
 ### Themes
 
@@ -261,7 +287,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 151 tests: core behaviour, themes, help, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 184 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

@@ -69,6 +69,7 @@ actions! {
         Refresh => ("refresh", "Refresh"),
         Help => ("help", "Show help"),
         CycleTheme => ("cycle_theme", "Cycle color theme"),
+        LastOutput => ("last_output", "View output of the last run command"),
         Cancel => ("cancel", "Clear marks and filter"),
     }
 }
@@ -300,6 +301,7 @@ impl Keymap {
             ("f6", A::Move),
             ("f7", A::MkDir),
             ("ctrl+n", A::NewFile),
+            ("ctrl+o", A::LastOutput),
             ("f8", A::Delete),
             ("delete", A::Delete),
             (".", A::ToggleHidden),

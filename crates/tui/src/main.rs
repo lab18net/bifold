@@ -1,12 +1,13 @@
 mod app;
 mod ui;
 
-use std::io::{self, Stdout};
-use std::path::PathBuf;
+use std::io::{self, Stdout, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use bifold_core::config::Config;
+use bifold_core::runcmd;
 use bifold_core::session::Session;
 use bifold_core::{APP_NAME, VERSION};
 use crossterm::cursor;
@@ -46,7 +47,7 @@ KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.t
     Ctrl+A mark all          Ctrl+D clear marks
     . hidden files           s sort key     o sort order
     / filter                 g go to path   r refresh     h / ? help (h is fixed)   q quit
-    t cycle colour theme
+    t cycle colour theme     Ctrl+O output of the last run command
     In the viewer: x toggles hex, w wraps, Esc closes.
 ";
 
@@ -188,8 +189,55 @@ fn event_loop(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
                 _ => {}
             }
         }
+        if let Some((command, cwd)) = app.pending_run.take() {
+            run_in_terminal(guard, app, &command, &cwd)?;
+        }
         app.tick();
     }
+    Ok(())
+}
+
+/// Hand the terminal to `command` like a shell would: leave the alternate
+/// screen, run it with the real stdin/stdout, wait for Enter so its output can
+/// be read, then come back and refresh both panes.
+fn run_in_terminal(
+    guard: &mut TerminalGuard,
+    app: &mut App,
+    command: &str,
+    cwd: &Path,
+) -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
+    println!("$ {command}");
+    // On a pty, so the output is shown live *and* kept for Ctrl+O.
+    let result = runcmd::run_in_pty(command, cwd);
+    let (note, message) = match &result {
+        Ok(out) => {
+            let note = match out.exit {
+                Some(code) => format!("exit {code}"),
+                None => "killed by a signal".to_string(),
+            };
+            (note, format!("{}  (Ctrl+O: output)", out.summary()))
+        }
+        Err(err) => (format!("error: {err}"), format!("error: {err}")),
+    };
+    if let Ok(out) = result {
+        app.session.last_run = Some(out);
+    }
+    print!("\n[{note}] press Enter to return to {APP_NAME}… ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+    guard.terminal.clear()?;
+    // Keys typed while the command ran must not drive the file manager.
+    while event::poll(Duration::ZERO)? {
+        let _ = event::read()?;
+    }
+    app.session.reload_all();
+    app.set_message(message);
     Ok(())
 }
 
