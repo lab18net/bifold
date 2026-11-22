@@ -43,10 +43,12 @@
 
 ## M3 — shipping
 
-- [ ] macOS `.app` bundle + icon + notarisation (`cargo bundle` + a `scripts/` pipeline)
-- [ ] Homebrew tap (`brew install lab18/tap/bifold`)
+- [x] macOS `.app` bundle + icon, ad-hoc signed (`scripts/package-macos.sh`, `make app`)
+- [x] Homebrew cask `bifold-app` for `Bifold.app` (quarantine cleared; tap only)
+- [ ] Notarisation (needs an Apple Developer ID); then drop the quarantine step
+- [ ] Homebrew tap (`brew install lab18net/tap/bifold`) — formulae, man pages, release workflow and `scripts/release.sh` are done and verified locally (ADR-006); remaining: create `lab18net/homebrew-tap`, tag `v0.1.0`, publish the first formulae
 - [ ] Linux builds in CI (X11/Wayland deps) and a Windows smoke build
-- [ ] Release automation: tagged builds, changelog, version bump script
+- [x] Release automation: `scripts/release.sh` (version bump, changelog, tag), `release.yml` (GitHub release + macOS tarball), `check-release-metadata.sh` in CI
 - [ ] Landing page on the Lab18 site with the two-pane screenshot that sells it
 
 ## Deliberately out of scope (for now)

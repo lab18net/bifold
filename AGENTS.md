@@ -14,7 +14,12 @@ crates/gui/           bifold-gui  — binary `bifold-gui`
 docs/decisions/       ADRs (Context → Decision → Consequences)
 docs/PLAN.md          milestones
 docs/naming.md        product-name candidates + collision notes
-scripts/              rename-product.sh
+scripts/              release.sh, update-formula.sh, check-release-metadata.sh,
+                      changelog-section.sh, rename-product.sh
+man/                  bifold.1, bifold-gui.1 (every CLI flag must be documented)
+packaging/macos/      Info.plist.in + Bifold.icns for scripts/package-macos.sh (Bifold.app)
+packaging/homebrew/   formula templates (*.rb.in), tap starter files, publishing guide
+CHANGELOG.md          Keep a Changelog; the [Unreleased] section becomes the release notes
 ```
 
 ## Commands
@@ -26,6 +31,8 @@ cargo clippy --workspace --all-targets      # must stay at zero warnings
 cargo fmt --all
 cargo run -p bifold-tui -- --path ~/src
 cargo run -p bifold-gui -- --path ~/src
+make release-check                           # check + man lint + release metadata
+scripts/release.sh X.Y.Z --dry-run           # then without --dry-run / with --push
 ```
 
 `make check` runs fmt + clippy + tests together.
@@ -82,7 +89,25 @@ cargo run -p bifold-gui -- --path ~/src
    `Config::save_view_changes_to`, which edits in place with `toml_edit` and
    writes only settings in `ViewSettings` that changed since the session
    started. A new setting the app itself changes at runtime must be added to
-   `ViewSettings`; a file that does not parse must never be overwritten.
+   `ViewSettings`; a file that does not parse must never be overwritten. Tests must
+never reach the real file either: `App::persist` / `GuiApp::persist` default to
+`false` and only `main`/`run` turn them on, and a test that needs to save uses
+`save_config_to` with a tempdir path.
+
+## Releasing
+
+- The version lives only in `[workspace.package]` of the root `Cargo.toml`; every
+  crate inherits it. Do not edit it by hand: `scripts/release.sh X.Y.Z` bumps it,
+  dates `CHANGELOG.md` and the man pages, runs `make check`, commits and tags
+  (it pushes only with `--push`). Write user-visible changes under
+  `## [Unreleased]` in `CHANGELOG.md` as you make them; the script refuses to
+  release an empty section.
+- A new or renamed command-line flag must be added to the `--help` text **and**
+  to `man/bifold.1` (or `bifold-gui.1`): `scripts/check-release-metadata.sh`,
+  which CI runs, fails otherwise.
+- `Cargo.lock` stays committed and current (Homebrew builds with `--locked`).
+- Homebrew formulae are templates in `packaging/homebrew/`; never commit a real
+  URL or checksum there. See `packaging/homebrew/README.md` and ADR-006.
 
 ## Adding a feature
 
@@ -110,4 +135,7 @@ cargo run -p bifold-gui -- --path ~/src
 The name appears as `Bifold` (display), `bifold` (binaries, config dir, crate
 prefix). `scripts/rename-product.sh <NewName>` rewrites all three consistently;
 review the diff and run `make check` afterwards. Directory names (`crates/core`)
-are name-independent on purpose — only package names change.
+are name-independent on purpose — only package names change. The script also
+renames the man pages and the Homebrew templates; the GitHub repository, the tap
+and existing tags have to be renamed by hand (and the repo slug in
+`scripts/check-release-metadata.sh` follows the rename).

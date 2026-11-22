@@ -1,0 +1,72 @@
+.\" Man page for bifold-gui(1).
+.TH BIFOLD-GUI 1 "2026-11-22" "Bifold" "User Commands"
+.SH NAME
+bifold\-gui \- two\-pane file manager, desktop window
+.SH SYNOPSIS
+.B bifold\-gui
+.RI [ PATH ]
+.RB [ \-\-left
+.IR DIR ]
+.RB [ \-\-right
+.IR DIR ]
+.RB [ \-\-path
+.IR DIR ]
+.RB [ \-\-theme
+.IR NAME ]
+.RB [ \-\-list\-themes ]
+.RB [ \-\-no\-config ]
+.SH DESCRIPTION
+.B bifold\-gui
+is the desktop front end of Bifold: the same two\-panel file manager as
+.BR bifold (1),
+in a native window.
+Both programs share one core, so the key bindings, themes and preferences in
+.I ~/.config/bifold/config.toml
+apply to both, and every operation behaves identically.
+.PP
+Keyboard shortcuts follow the same keymap as the terminal program
+.RB ( Cmd
+and
+.B Ctrl
+are interchangeable); the mouse selects (click), marks (Cmd\- or Shift\-click),
+enters (double\-click) and resizes the panes (drag the divider), and the toolbar
+mirrors every action.
+Press
+.B h
+for the help window.
+.SH OPTIONS
+.TP
+.BR \-l ", " \-\-left " " \fIDIR\fR
+Directory for the left pane.
+.TP
+.BR \-r ", " \-\-right " " \fIDIR\fR
+Directory for the right pane.
+.TP
+.BR \-p ", " \-\-path " " \fIDIR\fR
+Directory for both panes.
+.TP
+.BI \-\-theme " NAME"
+Colour theme for this run only.
+.TP
+.B \-\-list\-themes
+List the built\-in and user themes and exit.
+.TP
+.B \-\-no\-config
+Ignore the configuration file and do not write one.
+.TP
+.BR \-h ", " \-\-help
+Show a short help text and exit.
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.SH FILES
+See
+.BR bifold (1).
+.SH SEE ALSO
+.BR bifold (1)
+.SH AUTHORS
+Andrey Abramov
+.MT stinger911@gmail.com
+.ME
+.SH LICENSE
+MIT.

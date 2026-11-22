@@ -1,0 +1,30 @@
+cask "bifold-app" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "@URL@"
+  name "Bifold"
+  desc "Two-pane file manager, desktop app"
+  homepage "https://github.com/lab18net/bifold"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on arch: :arm64
+  depends_on :macos
+
+  app "Bifold.app"
+
+  # The app is ad-hoc signed and not notarised (no Developer ID yet), so without
+  # this Gatekeeper refuses to open it. Remove once releases are notarised.
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/Bifold.app"]
+  end
+
+  zap trash: [
+    "~/.config/bifold",
+    "~/Library/Saved Application State/net.lab18.bifold.savedState",
+  ]
+end

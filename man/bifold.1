@@ -1,0 +1,210 @@
+.\" Man page for bifold(1). Keep the OPTIONS in sync with `bifold --help`:
+.\" scripts/check-release-metadata.sh fails when a flag is undocumented here.
+.TH BIFOLD 1 "2026-11-22" "Bifold" "User Commands"
+.SH NAME
+bifold \- two\-pane file manager for the terminal
+.SH SYNOPSIS
+.B bifold
+.RI [ PATH ]
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B bifold
+is a full\-screen, two\-panel file manager in the classic commander tradition:
+the left pane is where you are, the right pane is where you are going.
+Copy and move go from the active pane to the other one, in a background thread
+with progress and cancel.
+Deleting moves items to the trash by default.
+.PP
+The same program core drives the desktop front end,
+.BR bifold\-gui (1).
+Key bindings, colour themes and preferences are shared between the two.
+.PP
+Both panes start at
+.I PATH
+if one is given, otherwise at the folders remembered from the last session
+(or the home folder).
+.SH OPTIONS
+.TP
+.BR \-l ", " \-\-left " " \fIPATH\fR
+Directory for the left pane.
+.TP
+.BR \-r ", " \-\-right " " \fIPATH\fR
+Directory for the right pane.
+.TP
+.BR \-p ", " \-\-path " " \fIPATH\fR
+Directory for both panes.
+.TP
+.B \-\-dump
+Print both panes as plain text and exit, without starting the interface.
+.TP
+.B \-\-dump\-keys
+Print the effective key bindings as TOML and exit.
+The output can be pasted into the configuration file.
+.TP
+.BI \-\-theme " NAME"
+Colour theme for this run only; it is not saved.
+.TP
+.B \-\-list\-themes
+List the built\-in and user themes and exit.
+.TP
+.B \-\-no\-config
+Ignore the configuration file and do not write one.
+.TP
+.BR \-h ", " \-\-help
+Show a short help text and exit.
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.SH KEYS
+These are the defaults; every one except those listed under
+.B Fixed keys
+can be rebound in the configuration file.
+Press
+.B h
+inside the program for a tabbed help screen generated from the live bindings.
+.TP
+.B Tab
+Switch the active pane.
+.TP
+.BR Enter ", " Right ", " l
+Enter a folder, view a file, or, on an executable, open an editable run line.
+.TP
+.BR Left ", " Backspace
+Go to the parent folder.
+.TP
+.BR Up ", " Down ", " k ", " j
+Move the cursor.
+.TP
+.B Space
+Mark the entry and step down.
+.BR Ctrl+A " / " Ctrl+D
+mark all / clear marks.
+.TP
+.BR F2 ", " F3 ", " F4
+Rename; view a file; view it as a hex dump.
+.TP
+.BR F5 ", " F6
+Copy / move to the other pane.
+.TP
+.BR F7 ", " F8
+New folder; delete (to the trash).
+.TP
+.B Ctrl+N
+New file.
+.TP
+.B /
+Filter the listing; plain text, or
+.B *
+and
+.B ?
+globs.
+.TP
+.BR g ", " r ", " .
+Go to a path; refresh; show or hide hidden files.
+.TP
+.BR s ", " o
+Cycle the sort key; flip the sort order.
+.TP
+.B t
+Cycle the colour theme.
+.TP
+.B H
+Show or hide the key\-hint line at the bottom of the screen.
+.TP
+.B Ctrl+O
+Switch to the real terminal, as it is, and back (Enter, Esc or Ctrl+O returns).
+.TP
+.BR q ", " Ctrl+C
+Quit.
+.PP
+In a text input,
+.B Tab
+completes folders, names, paths and programs on
+.BR PATH ;
+.B Shift+Tab
+goes back through the candidates.
+.PP
+In the viewer,
+.B x
+toggles hex,
+.B w
+wraps lines and
+.B Esc
+closes.
+.SS Fixed keys
+.B h
+(help), the dialog keys
+.RB ( y / n ,
+.BR Enter ,
+.BR Esc ,
+.BR Tab )
+and the tab keys inside the help screen are not configurable.
+.SH FILES
+.TP
+.I ~/.config/bifold/config.toml
+Preferences and key bindings.
+The directory is
+.I $XDG_CONFIG_HOME/bifold
+when that variable is set.
+Bifold edits this file in place on exit and writes only the settings that
+changed during the session; comments and unknown keys are kept.
+A file that does not parse is reported at start\-up and never overwritten.
+.TP
+.I ~/.config/bifold/themes/NAME.toml
+User colour themes; a theme may start from another with
+.BR extends .
+.TP
+.I ~/.Trash
+Where deleted items go (unless
+.B delete_mode = "permanent"
+is set).
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Base directory of the configuration, instead of
+.IR ~/.config .
+.TP
+.B BIFOLD_TRASH_DIR
+Use this folder as the trash instead of
+.IR ~/.Trash .
+.TP
+.B HOME
+Home folder: default start folder and the base of
+.B ~
+in paths.
+.SH EXIT STATUS
+.B 0
+on normal exit,
+.B 1
+on any error: an unknown option, a missing argument, or a terminal that cannot
+be initialised (for example when standard input is not a terminal).
+.SH EXAMPLES
+Both panes in a project folder:
+.PP
+.RS
+.B bifold \-\-path ~/src/project
+.RE
+.PP
+Compare two folders:
+.PP
+.RS
+.B bifold \-l ~/src \-r ~/Downloads
+.RE
+.PP
+Try a theme without saving it:
+.PP
+.RS
+.B bifold \-\-theme nord
+.RE
+.SH SEE ALSO
+.BR bifold\-gui (1)
+.PP
+Project home and full documentation:
+.UR https://github.com/lab18net/bifold
+.UE
+.SH AUTHORS
+Andrey Abramov
+.MT stinger911@gmail.com
+.ME
+.SH LICENSE
+MIT.

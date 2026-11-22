@@ -41,6 +41,34 @@ A project of **Andrey Abramov Consulting** (Lab18).
 Not there yet: file icons/thumbnails, drag & drop, tabs, archive browsing,
 remote protocols, macOS `.app` bundle. See [docs/PLAN.md](docs/PLAN.md).
 
+## Install
+
+**Homebrew** (macOS), from the Lab18 tap:
+
+```bash
+brew install lab18net/tap/bifold        # terminal UI, with man page
+brew install lab18net/tap/bifold-gui    # desktop window (macOS)
+```
+
+**Prebuilt macOS binaries** (Apple silicon) are attached to each
+[GitHub release](https://github.com/lab18net/bifold/releases), with a checksum.
+
+**From source** with Rust 1.88+: `cargo install --git
+https://github.com/lab18net/bifold --locked bifold-tui` (add `bifold-gui` for the
+desktop window). Cargo does not install the man pages; they are in `man/`.
+
+**macOS app via Homebrew** (Apple silicon): `brew install --cask lab18net/tap/bifold-app`
+installs `Bifold.app` into /Applications and clears the quarantine flag, since the
+app is not notarised yet.
+
+**macOS app, by hand:** each release also has `Bifold-<version>-aarch64.app.zip`. The app
+is signed ad hoc and not notarised, so on first launch use right-click → Open
+(or `xattr -dr com.apple.quarantine Bifold.app`). Build it yourself with
+`make app` (writes `dist/Bifold.app`).
+
+Release process, the Homebrew tap and how to try a formula before it is
+published: [packaging/homebrew/README.md](packaging/homebrew/README.md).
+
 ## Build and run
 
 Requires Rust 1.88+.
@@ -317,7 +345,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 219 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 221 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

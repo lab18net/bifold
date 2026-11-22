@@ -8,8 +8,11 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 authors = ["Andrey Abramov <stinger911@gmail.com>"]
-repository = "https://github.com/lab18/bifold"
-homepage = "https://lab18.io/bifold"
+repository = "https://github.com/lab18net/bifold"
+# Distributed as a Homebrew formula / GitHub release, not through crates.io.
+publish = false
+keywords = ["file-manager", "tui", "terminal", "egui", "commander"]
+categories = ["command-line-utilities", "filesystem"]
 
 [workspace.dependencies]
 bifold-core = { path = "crates/core" }

@@ -5,6 +5,8 @@
 #
 # Only package names and strings change; directory names (crates/core, …) stay
 # put, so the workspace keeps working. Cargo.lock is left for cargo to refresh.
+# Man pages and Homebrew formula templates are renamed too. The GitHub repo, the
+# Homebrew tap and the release tags are NOT touched: rename those on GitHub.
 set -euo pipefail
 
 if [[ $# -lt 1 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -38,7 +40,7 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
 
 LIST=$(git ls-files -co --exclude-standard \
   | grep -Ev '^(target/|Cargo.lock$)' \
-  | grep -E '\.(rs|md|toml|sh|ya?ml)$|(^|/)Makefile$' \
+  | grep -E '\.(rs|md|toml|sh|ya?ml|1)$|\.rb\.in$|(^|/)Makefile$' \
   | grep -v '^docs/naming.md$' || true)   # keeps the naming history intact
 
 if [[ -z "$LIST" ]]; then
@@ -65,6 +67,16 @@ while IFS= read -r file; do
     fi
   fi
 done <<< "$LIST"
+
+# Files named after the product: man pages and Homebrew formula templates.
+for old_file in man/"$OLD_SLUG"*.1 packaging/homebrew/"$OLD_SLUG"*.rb.in packaging/homebrew/cask/"$OLD_SLUG"*.rb.in; do
+  [[ -f "$old_file" ]] || continue
+  new_file="$(dirname "$old_file")/${SLUG}$(basename "$old_file" | sed "s/^$OLD_SLUG//")"
+  printf '  %-42s -> %s\n' "$old_file" "$new_file"
+  if [[ $DRY_RUN -eq 0 ]]; then
+    if git ls-files --error-unmatch "$old_file" >/dev/null 2>&1; then git mv "$old_file" "$new_file"; else mv "$old_file" "$new_file"; fi
+  fi
+done
 
 echo
 echo "$TOTAL occurrence(s) in $FILE_COUNT file(s)$([[ $DRY_RUN -eq 1 ]] && echo ' — dry run, nothing written')"

@@ -1,0 +1,80 @@
+name: release
+
+# Pushing a tag vX.Y.Z (see scripts/release.sh) builds, tests and publishes the
+# GitHub release. The Homebrew tap picks the release up from there: its daily
+# `brew bump` workflow opens a PR that updates the formulae (packaging/homebrew/).
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag against the release metadata
+        run: scripts/check-release-metadata.sh --release "${GITHUB_REF_NAME#v}"
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: cargo build --workspace --release --locked
+
+      - name: Package the macOS binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          arch="$(uname -m)"; [ "$arch" = "arm64" ] && arch="aarch64"
+          name="bifold-${version}-${arch}-apple-darwin"
+          mkdir -p "dist/$name"
+          cp target/release/bifold target/release/bifold-gui man/bifold.1 man/bifold-gui.1 \
+             LICENSE README.md CHANGELOG.md "dist/$name/"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          rm -rf "dist/$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          ls -l dist
+
+      - name: Package Bifold.app
+        run: scripts/package-macos.sh --no-build --out dist
+
+      - name: Release notes from CHANGELOG.md
+        run: scripts/changelog-section.sh "${GITHUB_REF_NAME#v}" > notes.md
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --verify-tag $flags \
+            --title "Bifold ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*
+
+      - name: Homebrew hand-off
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha="$(curl -fsSL --retry 3 "$url" | shasum -a 256 | cut -d' ' -f1)"
+          {
+            echo "### Homebrew"
+            echo
+            echo "Source archive: $url"
+            echo
+            echo "sha256: \`$sha\`"
+            echo
+            echo "The tap's daily bump workflow opens the formula PR on its own. To do it by hand:"
+            echo
+            echo '```'
+            echo "scripts/update-formula.sh $version --tap ../homebrew-tap"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
