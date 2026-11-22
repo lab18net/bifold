@@ -7,6 +7,8 @@ All notable changes to Bifold are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-22
+
 First public release.
 
 ### Fixed
@@ -51,4 +53,5 @@ First public release.
   does not parse is never overwritten.
 - Man pages `bifold(1)` and `bifold-gui(1)`; Homebrew formulae for a tap.
 
-[Unreleased]: https://github.com/lab18net/bifold/commits/main
+[Unreleased]: https://github.com/lab18net/bifold/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/lab18net/bifold/releases/tag/v0.1.0
