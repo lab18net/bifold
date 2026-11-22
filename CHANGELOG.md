@@ -7,6 +7,8 @@ All notable changes to Bifold are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-22
+
 ### Added
 
 - Project site at <https://lab18net.github.io/bifold/> (`site/`, deployed with GitHub
@@ -64,5 +66,6 @@ First public release.
   does not parse is never overwritten.
 - Man pages `bifold(1)` and `bifold-gui(1)`; Homebrew formulae for a tap.
 
-[Unreleased]: https://github.com/lab18net/bifold/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lab18net/bifold/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/lab18net/bifold/compare/v0.1.0...v0.1.8
 [0.1.0]: https://github.com/lab18net/bifold/releases/tag/v0.1.0
