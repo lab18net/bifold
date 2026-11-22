@@ -99,7 +99,7 @@ pub struct App {
     /// A command the user confirmed in the run prompt. The event loop owns the
     /// terminal, so it takes this, suspends the UI and runs it.
     pub pending_run: Option<(String, PathBuf)>,
-    /// Ctrl+O: the event loop should show the last command's terminal output.
+    /// Ctrl+O: the event loop should switch to the real terminal.
     pub show_terminal: bool,
 }
 
@@ -169,7 +169,7 @@ impl App {
             Action::Open => self.open_cursor(),
             Action::View => self.open_viewer(false),
             Action::ViewHex => self.open_viewer(true),
-            Action::LastOutput => self.show_last_output(),
+            Action::LastOutput => self.show_terminal(),
             Action::Rename => self.prompt(PromptKind::Rename, None),
             Action::Copy => self.prompt(PromptKind::CopyTo, None),
             Action::Move => self.prompt(PromptKind::MoveTo, None),
@@ -437,13 +437,10 @@ impl App {
         }
     }
 
-    /// Ctrl+O: show the terminal as the last command left it. The event loop
-    /// owns the terminal, so it takes `show_terminal`, leaves the alternate
-    /// screen and replays the recorded output.
-    fn show_last_output(&mut self) -> Mode {
-        if self.session.last_run.is_none() {
-            return self.fail("no command has been run yet (Enter on an executable runs one)");
-        }
+    /// Ctrl+O: switch to the real terminal as it is. The event loop owns the
+    /// terminal, so it takes `show_terminal`, leaves the alternate screen and
+    /// waits for a key. No command needs to have run: it is the plain terminal.
+    fn show_terminal(&mut self) -> Mode {
         self.show_terminal = true;
         Mode::Normal
     }
@@ -966,28 +963,8 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_without_a_previous_run_says_so() {
+    fn ctrl_o_asks_the_event_loop_for_the_terminal_with_or_without_a_run() {
         let (_dir, mut app) = fixture();
-        app.on_key(ctrl('o'));
-        assert!(matches!(app.mode, Mode::Normal));
-        assert!(
-            app.session.status().contains("no command has been run"),
-            "{}",
-            app.session.status()
-        );
-    }
-
-    #[test]
-    fn ctrl_o_asks_the_event_loop_to_show_the_terminal() {
-        let (dir, mut app) = fixture();
-        app.session.last_run = Some(
-            bifold_core::runcmd::run_captured(
-                "echo first; echo second",
-                dir.path(),
-                bifold_core::runcmd::DEFAULT_TIMEOUT,
-            )
-            .unwrap(),
-        );
         assert!(!app.show_terminal);
         app.on_key(ctrl('o'));
         assert!(
@@ -996,8 +973,9 @@ mod tests {
         );
         assert!(
             matches!(app.mode, Mode::Normal),
-            "no viewer: the real terminal is shown"
+            "no viewer, no replay: the real terminal is shown"
         );
+        assert!(app.session.status().is_empty() || !app.session.status().contains("no command"));
     }
 
     #[test]
@@ -1005,24 +983,15 @@ mod tests {
         let mut config = bifold_core::config::Config::default();
         config.keys.insert("ctrl+o".into(), "none".into());
         config.keys.insert("O".into(), "last_output".into());
-        let (_dir, mut app) = {
-            let dir = tempfile::tempdir().unwrap();
-            fs::create_dir(dir.path().join("left")).unwrap();
-            fs::create_dir(dir.path().join("right")).unwrap();
-            let mut session = Session::with_themes_dir(config, None);
-            let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
-            (dir, App::new(session))
-        };
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("left")).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        let mut session = Session::with_themes_dir(config, None);
+        let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
+        let mut app = App::new(session);
         app.on_key(ctrl('o'));
-        assert!(
-            app.session.status().is_empty() || !app.session.status().contains("no command"),
-            "ctrl+o is unbound now"
-        );
+        assert!(!app.show_terminal, "ctrl+o is unbound now");
         app.on_key(key(KeyCode::Char('O')));
-        assert!(
-            app.session.status().contains("no command has been run"),
-            "{}",
-            app.session.status()
-        );
+        assert!(app.show_terminal);
     }
 }

@@ -70,7 +70,7 @@ actions! {
         Help => ("help", "Show help"),
         CycleTheme => ("cycle_theme", "Cycle color theme"),
         ToggleHints => ("toggle_hints", "Show / hide the key-hint line"),
-        LastOutput => ("last_output", "Show the last run command's output"),
+        LastOutput => ("last_output", "Show the terminal (desktop: last command output)"),
         Cancel => ("cancel", "Clear marks and filter"),
     }
 }

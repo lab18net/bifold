@@ -17,14 +17,12 @@ program wants to use, the desktop one has none.
 2. **The command runs through `sh -c` in the active pane's folder.** The user
    typed or confirmed the line, so it is a shell line, like a terminal prompt.
 3. **One module, two run modes** in `core::runcmd`:
-   - `run_in_pty` — the TUI leaves the alternate screen and runs the command
-     on a pseudo-terminal mirrored to the real terminal, so the program has a
-     tty (interactive programs work) *and* its output is recorded for
-     `Ctrl+O`. The real terminal is put in raw mode meanwhile, so Ctrl+C
-     reaches the program (its own session and controlling tty) and not
-     Bifold. It waits for Enter so the output can be read, then restores
-     itself and reloads both panes. `run_inherited` (no recording) remains as
-     the non-pty primitive.
+   - `run_inherited` — the TUI leaves the alternate screen and gives the
+     command the real terminal, like a shell does: interactive and full-screen
+     programs work and the window can be resized. It waits for Enter so the
+     output can be read, then restores itself and reloads both panes. Ctrl+C
+     while it runs interrupts the command, not Bifold (SIGINT is ignored in
+     the parent and reset to default in the child).
    - `run_captured` — the GUI runs it on a worker thread with stdout and
      stderr merged on one pipe (ordered, and shell syntax errors are caught).
      Output is capped at the viewer's 4 MiB and shown in the viewer
@@ -32,13 +30,13 @@ program wants to use, the desktop one has none.
      that is still running is **left running**, not killed — it may be a GUI
      program the user just launched — and its partial output is shown.
 4. One command at a time in the GUI, matching the one-transfer rule.
-5. **`Ctrl+O` (`Action::LastOutput`)** shows the last run again. The record
-   (`Session::last_run`) lives in core and is filled by whichever runner the
-   front end used. The terminal front end replays the recorded raw pty stream
-   on the real screen (`RunOutcome::replay_bytes_cooked`, with DEC private mode
-   switches stripped so a full-screen program cannot hijack the replay) and
-   waits for Enter; the desktop shows the text in the viewer
-   (`PreviewKind::Output`).
+5. **`Ctrl+O` (`Action::LastOutput`)** shows the terminal. In the TUI that is
+   the real terminal, untouched: the command's output is already on its main
+   screen from when it ran, so nothing is recorded or replayed (an earlier
+   design recorded a pty stream and replayed it, which only duplicated what
+   was on screen). It works with or without a previous command. The desktop
+   has no terminal, so it shows the last run (`Session::last_run`, filled by
+   `run_captured`) in the viewer (`PreviewKind::Output`).
 
 ## Consequences
 

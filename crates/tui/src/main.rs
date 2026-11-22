@@ -11,7 +11,7 @@ use bifold_core::runcmd;
 use bifold_core::session::Session;
 use bifold_core::{APP_NAME, VERSION};
 use crossterm::cursor;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -47,7 +47,7 @@ KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.t
     Ctrl+A mark all          Ctrl+D clear marks
     . hidden files           s sort key     o sort order
     / filter                 g go to path   r refresh     h / ? help (h is fixed)   q quit
-    t cycle colour theme     Ctrl+O show the last command's output
+    t cycle colour theme     Ctrl+O show the terminal
     H show / hide the key-hint line (or show_hints = false in the config)
     In the viewer: x toggles hex, w wraps, Esc closes.
 ";
@@ -195,7 +195,7 @@ fn event_loop(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
             run_in_terminal(guard, app, &command, &cwd)?;
         }
         if std::mem::take(&mut app.show_terminal) {
-            show_last_in_terminal(guard, app)?;
+            show_terminal(guard)?;
         }
         app.tick();
     }
@@ -208,13 +208,8 @@ fn leave_ui() -> io::Result<()> {
     execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)
 }
 
-/// Wait for Enter (so output can be read), then come back to the file manager.
-fn return_to_ui(guard: &mut TerminalGuard, note: &str) -> io::Result<()> {
-    print!("\x1b[0m\n[{note}] press Enter to return to {APP_NAME}… ");
-    io::stdout().flush()?;
-    let mut line = String::new();
-    let _ = io::stdin().read_line(&mut line);
-
+/// Back to the file manager's screen.
+fn enter_ui(guard: &mut TerminalGuard) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
     guard.terminal.clear()?;
@@ -225,17 +220,20 @@ fn return_to_ui(guard: &mut TerminalGuard, note: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn exit_note(out: &runcmd::RunOutcome) -> String {
-    match (out.exit, out.detached) {
-        (_, true) => "still running".to_string(),
-        (Some(code), _) => format!("exit {code}"),
-        (None, _) => "killed by a signal".to_string(),
-    }
+/// Wait for Enter (so output can be read), then come back to the file manager.
+fn return_to_ui(guard: &mut TerminalGuard, note: &str) -> io::Result<()> {
+    print!("\x1b[0m\n[{note}] press Enter to return to {APP_NAME}… ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    enter_ui(guard)
 }
 
 /// Hand the terminal to `command` like a shell would: leave the alternate
-/// screen, run it on a pty wired to the real terminal, wait for Enter so its
-/// output can be read, then come back and refresh both panes.
+/// screen, run it with the real stdin/stdout/stderr (so interactive and
+/// full-screen programs work and the window can be resized), wait for Enter so
+/// its output can be read, then come back and refresh both panes. The output
+/// stays on the terminal's own screen, which is what `Ctrl+O` shows.
 fn run_in_terminal(
     guard: &mut TerminalGuard,
     app: &mut App,
@@ -244,46 +242,53 @@ fn run_in_terminal(
 ) -> io::Result<()> {
     leave_ui()?;
     println!("$ {command}");
-    // On a pty, so the output is shown live *and* kept for Ctrl+O.
-    let result = runcmd::run_in_pty(command, cwd);
-    let (note, message) = match &result {
-        Ok(out) => (
-            exit_note(out),
-            format!("{}  (Ctrl+O: show it again)", out.summary()),
+    let (note, message) = match runcmd::run_inherited(command, cwd) {
+        Ok(Some(0)) => ("exit 0".to_string(), format!("ran: {command} (exit 0)")),
+        Ok(Some(code)) => (
+            format!("exit {code}"),
+            format!("ran: {command} — exit {code}"),
+        ),
+        Ok(None) => (
+            "killed by a signal".to_string(),
+            format!("ran: {command} — killed by a signal"),
         ),
         Err(err) => (format!("error: {err}"), format!("error: {err}")),
     };
-    if let Ok(out) = result {
-        app.session.last_run = Some(out);
-    }
     return_to_ui(guard, &note)?;
     app.session.reload_all();
-    app.set_message(message);
+    app.set_message(format!("{message}  (Ctrl+O shows the terminal)"));
     Ok(())
 }
 
-/// Ctrl+O: show the terminal as the last command left it — its recorded
-/// output replayed on the real screen, like switching to the shell and back.
-fn show_last_in_terminal(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
-    let Some(run) = app.session.last_run.as_ref() else {
-        return Ok(());
-    };
-    let (command, bytes, note, truncated) = (
-        run.command.clone(),
-        run.replay_bytes_cooked(),
-        exit_note(run),
-        run.truncated,
-    );
+/// Ctrl+O: switch to the real terminal exactly as it is — whatever the last
+/// command printed is still on it, nothing is redrawn — and wait for a key.
+/// Like Midnight Commander's Ctrl+O.
+fn show_terminal(guard: &mut TerminalGuard) -> io::Result<()> {
     leave_ui()?;
+    // Raw mode only to read a single key without echo or a line buffer.
+    enable_raw_mode()?;
     let mut out = io::stdout();
-    writeln!(out, "$ {command}")?;
-    out.write_all(&bytes)?;
-    if truncated {
-        write!(out, "\x1b[0m\n[output was cut at 4 MiB]")?;
+    write!(
+        out,
+        "\x1b[2m(Enter, Esc or Ctrl+O returns to {APP_NAME})\x1b[0m"
+    )?;
+    out.flush()?;
+    loop {
+        if let Event::Key(key) = event::read()? {
+            let back = match key.code {
+                KeyCode::Enter | KeyCode::Esc => true,
+                KeyCode::Char('o') => key.modifiers.contains(KeyModifiers::CONTROL),
+                _ => false,
+            };
+            if key.kind == KeyEventKind::Press && back {
+                break;
+            }
+        }
     }
-    return_to_ui(guard, &note)?;
-    app.set_message("back from the last command's output");
-    Ok(())
+    // Take the hint back so repeated Ctrl+O leaves nothing behind.
+    write!(out, "\r\x1b[2K")?;
+    out.flush()?;
+    enter_ui(guard)
 }
 
 fn dump(session: &Session) {

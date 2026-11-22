@@ -70,10 +70,10 @@ cargo run -p bifold-gui -- --path ~/src
    `Color::Accent`) go through `Theme::resolve`. Tokens keep herdr's names; a
    `None` token means "terminal default" and needs a fallback on the desktop.
 12. **Commands run through `core::runcmd`.** A front end never spawns a shell
-   itself: the TUI uses `run_in_pty` (after leaving the alternate screen),
-   the GUI uses `run_captured` on a worker thread, and both store the result
-   in `Session::last_run` (`Ctrl+O`: the TUI replays it on the terminal, the
-   GUI shows it in the viewer). Output is capped, a slow
+   itself: the TUI uses `run_inherited` (after leaving the alternate screen;
+   `Ctrl+O` just flips back to that terminal), the GUI uses `run_captured` on
+   a worker thread and keeps the result in `Session::last_run` (`Ctrl+O` shows
+   it in the viewer). Captured output is capped, a slow
    command is detached rather than killed, and `Session::run_suggestion`
    decides when Enter offers a run line.
 13. **The config file belongs to the user.** `Config::save_to` (a full

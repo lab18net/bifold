@@ -69,7 +69,7 @@ cargo build --release
 | `F5` | copy to other pane | `F6` | move to other pane |
 | `F7` | new folder | `F8` | delete |
 | `Ctrl+N` | new file | `Ctrl+A` / `Ctrl+D` | mark all / clear marks |
-| `Ctrl+O` | show the last command's output | `H` | show / hide the key-hint line |
+| `Ctrl+O` | show the terminal (desktop: last output) | `H` | show / hide the key-hint line |
 | `.` | hidden files | `s` / `o` | cycle sort key / flip order |
 | `/` | filter | `g` | go to path |
 | `r` | refresh | `b` / `f` | back / forward |
@@ -205,24 +205,21 @@ pre-filled with `./name` — add arguments, press `Enter` to run, `Esc` to
 cancel. It runs through `sh -c` in the active pane's folder. `F3`/`F4` still
 view the file, and `run_executables = false` makes `Enter` view it as before.
 
-- **Terminal:** Bifold steps aside and runs the program on a pseudo-terminal
-  wired to your real one: it sees a real tty (colours, prompts, full-screen
-  programs work) and `Ctrl+C` stops the program, not Bifold. Everything it
-  prints is also recorded. After it exits you see its exit code and press
-  `Enter` to come back; both panes are reloaded. The window size is taken when
-  the command starts (resizing mid-run is not forwarded).
+- **Terminal:** Bifold steps aside and gives the program your real terminal
+  (interactive and full-screen programs work, the window can be resized, and
+  `Ctrl+C` stops the program, not Bifold). After it exits you see its exit code
+  and press `Enter` to come back; both panes are reloaded.
 - **Desktop:** the command runs in the background (no stdin), and its output
   and exit code open in the viewer. If it is still running after
   `run_timeout_ms` it is left running and the output so far is shown. One
   command at a time.
 
-**`Ctrl+O`** (action `last_output`) shows the last command run this session.
-In the **terminal** it switches to the real terminal and replays what the
-command printed, exactly as it looked (colours, rewritten progress lines, what
-you typed), then `Enter` brings you back. Terminal mode switches from the
-program (alternate screen, mouse, cursor hiding) are dropped from the replay so
-it cannot take the display over. On the **desktop** it opens the output in the
-viewer. Output is capped at 4 MiB.
+**`Ctrl+O`** (action `last_output`). In the **terminal** it switches to your
+real terminal, exactly as it is — whatever the last command printed is still
+on it, nothing is redrawn — and `Ctrl+O`, `Enter` or `Esc` brings you back
+(like Midnight Commander). It works at any time, not only after a command. The
+**desktop** has no terminal to switch to, so there it opens the last command's
+output in the viewer (capped at 4 MiB).
 
 ### Themes
 
@@ -302,7 +299,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 198 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 190 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```
