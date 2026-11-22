@@ -99,6 +99,8 @@ pub struct App {
     /// A command the user confirmed in the run prompt. The event loop owns the
     /// terminal, so it takes this, suspends the UI and runs it.
     pub pending_run: Option<(String, PathBuf)>,
+    /// Ctrl+O: the event loop should show the last command's terminal output.
+    pub show_terminal: bool,
 }
 
 impl App {
@@ -110,6 +112,7 @@ impl App {
             viewport: [20, 20],
             persist: true,
             pending_run: None,
+            show_terminal: false,
         }
     }
 
@@ -166,7 +169,7 @@ impl App {
             Action::Open => self.open_cursor(),
             Action::View => self.open_viewer(false),
             Action::ViewHex => self.open_viewer(true),
-            Action::LastOutput => self.open_last_output(),
+            Action::LastOutput => self.show_last_output(),
             Action::Rename => self.prompt(PromptKind::Rename, None),
             Action::Copy => self.prompt(PromptKind::CopyTo, None),
             Action::Move => self.prompt(PromptKind::MoveTo, None),
@@ -266,7 +269,6 @@ impl App {
             ViewerAction::Top => viewer.scroll = 0,
             ViewerAction::Bottom => viewer.scroll = max_scroll,
             ViewerAction::ToggleWrap => viewer.wrap = !viewer.wrap,
-            ViewerAction::ToggleHex if viewer.preview.kind == PreviewKind::Output => {}
             ViewerAction::ToggleHex => {
                 let want_hex = viewer.preview.kind != PreviewKind::Hex;
                 let (width, height) = viewer_area();
@@ -435,16 +437,15 @@ impl App {
         }
     }
 
-    /// Ctrl+O: the output of the last command run from the file list.
-    fn open_last_output(&mut self) -> Mode {
-        match self.session.last_run_preview() {
-            Some(preview) => Mode::Viewer(Viewer {
-                preview,
-                scroll: 0,
-                wrap: false,
-            }),
-            None => self.fail("no command has been run yet (Enter on an executable runs one)"),
+    /// Ctrl+O: show the terminal as the last command left it. The event loop
+    /// owns the terminal, so it takes `show_terminal`, leaves the alternate
+    /// screen and replays the recorded output.
+    fn show_last_output(&mut self) -> Mode {
+        if self.session.last_run.is_none() {
+            return self.fail("no command has been run yet (Enter on an executable runs one)");
         }
+        self.show_terminal = true;
+        Mode::Normal
     }
 
     fn open_viewer(&mut self, hex: bool) -> Mode {
@@ -977,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_shows_the_last_output_and_q_closes_it() {
+    fn ctrl_o_asks_the_event_loop_to_show_the_terminal() {
         let (dir, mut app) = fixture();
         app.session.last_run = Some(
             bifold_core::runcmd::run_captured(
@@ -987,21 +988,16 @@ mod tests {
             )
             .unwrap(),
         );
+        assert!(!app.show_terminal);
         app.on_key(ctrl('o'));
-        match &app.mode {
-            Mode::Viewer(viewer) => {
-                assert_eq!(viewer.preview.plain_lines(), ["first", "second"]);
-                assert!(
-                    viewer
-                        .preview
-                        .title()
-                        .starts_with("$ echo first; echo second")
-                );
-            }
-            other => panic!("expected the viewer, got {other:?}"),
-        }
-        app.on_key(key(KeyCode::Char('q')));
-        assert!(matches!(app.mode, Mode::Normal));
+        assert!(
+            app.show_terminal,
+            "queued for the event loop, which owns the terminal"
+        );
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "no viewer: the real terminal is shown"
+        );
     }
 
     #[test]

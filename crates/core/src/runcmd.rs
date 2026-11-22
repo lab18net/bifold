@@ -45,6 +45,10 @@ pub struct RunOutcome {
     /// Still running when the deadline passed; output is what arrived so far.
     pub detached: bool,
     pub output: String,
+    /// What the program wrote to its terminal, byte for byte (colours, `\r`
+    /// rewrites…), so a terminal front end can show it again. Empty when the
+    /// command did not run on a pty.
+    pub raw: Vec<u8>,
     /// More output arrived than the cap kept.
     pub truncated: bool,
     pub waited: Duration,
@@ -62,6 +66,35 @@ impl RunOutcome {
             (Some(code), _) => format!("ran: {} — exit {code}", self.command),
             (None, _) => format!("ran: {} — killed by a signal", self.command),
         }
+    }
+
+    /// Bytes to write to a real terminal to show this output again: the raw
+    /// pty stream when there is one, else the plain text. Terminal *mode*
+    /// switches are removed (see [`strip_private_modes`]) so replaying a
+    /// full-screen program cannot take the screen over.
+    ///
+    /// Line ends are `\r\n`, as a raw terminal needs. A terminal in normal
+    /// (cooked) mode adds the `\r` itself; use [`RunOutcome::replay_bytes_cooked`] there.
+    pub fn replay_bytes(&self) -> Vec<u8> {
+        if self.raw.is_empty() {
+            self.output.clone().into_bytes()
+        } else {
+            strip_private_modes(&self.raw)
+        }
+    }
+
+    /// [`RunOutcome::replay_bytes`] for a terminal in cooked mode: `\r\n` becomes
+    /// `\n` (the tty driver adds the `\r` back), a lone `\r` is kept.
+    pub fn replay_bytes_cooked(&self) -> Vec<u8> {
+        let bytes = self.replay_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                continue;
+            }
+            out.push(b);
+        }
+        out
     }
 
     pub fn succeeded(&self) -> bool {
@@ -181,6 +214,7 @@ pub fn run_captured(command: &str, cwd: &Path, timeout: Duration) -> Result<RunO
         exit,
         detached: !finished,
         output: String::from_utf8_lossy(&bytes).into_owned(),
+        raw: Vec::new(),
         truncated,
         waited: started.elapsed(),
     })
@@ -208,6 +242,7 @@ pub fn run_in_pty(command: &str, cwd: &Path) -> Result<RunOutcome> {
         exit,
         detached: false,
         output: String::new(),
+        raw: Vec::new(),
         truncated: false,
         waited: started.elapsed(),
     })
@@ -371,9 +406,33 @@ pub fn run_in_pty_to(command: &str, cwd: &Path, out: &mut dyn Write) -> Result<R
         exit,
         detached: false,
         output: tidy_terminal_text(&String::from_utf8_lossy(&recorded)),
+        raw: recorded,
         truncated,
         waited: started.elapsed(),
     })
+}
+
+/// Remove DEC private mode switches (`ESC [ ? … h` / `l`): alternate screen,
+/// mouse reporting, bracketed paste, cursor hiding… Everything else (colours,
+/// cursor movement, text) is kept.
+pub fn strip_private_modes(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'[') && bytes.get(i + 2) == Some(&b'?') {
+            let mut j = i + 3;
+            while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
+                j += 1;
+            }
+            if matches!(bytes.get(j), Some(b'h') | Some(b'l')) {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
 }
 
 /// A pty reports `\r\n`; a bare `\r` rewinds the line (progress bars), so only
@@ -580,5 +639,44 @@ mod tests {
         let killed = run_in_pty_to("kill -KILL $$", dir.path(), &mut Vec::new()).unwrap();
         assert_eq!(killed.exit, None);
         assert!(killed.summary().contains("signal"), "{}", killed.summary());
+    }
+
+    #[test]
+    fn replay_drops_mode_switches_and_keeps_text_and_colours() {
+        let raw = b"\x1b[?1049h\x1b[?25l\x1b[31mred\x1b[0m\r\nok\x1b[?2004h\x1b[?1000;1006l\x1b[2J";
+        assert_eq!(strip_private_modes(raw), b"\x1b[31mred\x1b[0m\r\nok\x1b[2J");
+        assert_eq!(
+            strip_private_modes(b"plain \x1b[?x"),
+            b"plain \x1b[?x",
+            "malformed sequences are left alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pty_run_keeps_the_raw_stream_for_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_in_pty_to(
+            "printf '\\033[?1049h\\033[32mgreen\\033[0m\\nprog\\r50%%\\n'",
+            dir.path(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            out.raw.starts_with(b"\x1b[?1049h\x1b[32mgreen"),
+            "{:?}",
+            String::from_utf8_lossy(&out.raw)
+        );
+        let replay = String::from_utf8(out.replay_bytes()).unwrap();
+        assert_eq!(replay, "\x1b[32mgreen\x1b[0m\r\nprog\r50%\r\n");
+        // Without a recording (the GUI path) the plain text is the replay.
+        let plain = run_captured("echo hi", dir.path(), DEFAULT_TIMEOUT).unwrap();
+        assert!(plain.raw.is_empty());
+        assert_eq!(plain.replay_bytes(), b"hi\n");
+        assert_eq!(
+            out.replay_bytes_cooked(),
+            b"\x1b[32mgreen\x1b[0m\nprog\r50%\n",
+            "\\r\\n -> \\n, a lone \\r stays"
+        );
     }
 }

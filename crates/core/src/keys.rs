@@ -70,7 +70,7 @@ actions! {
         Help => ("help", "Show help"),
         CycleTheme => ("cycle_theme", "Cycle color theme"),
         ToggleHints => ("toggle_hints", "Show / hide the key-hint line"),
-        LastOutput => ("last_output", "View output of the last run command"),
+        LastOutput => ("last_output", "Show the last run command's output"),
         Cancel => ("cancel", "Clear marks and filter"),
     }
 }

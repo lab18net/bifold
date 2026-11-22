@@ -109,7 +109,7 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
         key(map, &[A::Delete], 1, "delete (to the trash)"),
         key(map, &[A::MkDir, A::NewFile], 1, "new folder / new file"),
         key(map, &[A::Rename], 1, "rename"),
-        key(map, &[A::LastOutput], 1, "output of the last run command"),
+        key(map, &[A::LastOutput], 1, "show the last command's output"),
         heading("Look"),
         key(
             map,

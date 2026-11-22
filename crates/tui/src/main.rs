@@ -47,7 +47,7 @@ KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.t
     Ctrl+A mark all          Ctrl+D clear marks
     . hidden files           s sort key     o sort order
     / filter                 g go to path   r refresh     h / ? help (h is fixed)   q quit
-    t cycle colour theme     Ctrl+O output of the last run command
+    t cycle colour theme     Ctrl+O show the last command's output
     H show / hide the key-hint line (or show_hints = false in the config)
     In the viewer: x toggles hex, w wraps, Esc closes.
 ";
@@ -194,39 +194,23 @@ fn event_loop(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
         if let Some((command, cwd)) = app.pending_run.take() {
             run_in_terminal(guard, app, &command, &cwd)?;
         }
+        if std::mem::take(&mut app.show_terminal) {
+            show_last_in_terminal(guard, app)?;
+        }
         app.tick();
     }
     Ok(())
 }
 
-/// Hand the terminal to `command` like a shell would: leave the alternate
-/// screen, run it with the real stdin/stdout, wait for Enter so its output can
-/// be read, then come back and refresh both panes.
-fn run_in_terminal(
-    guard: &mut TerminalGuard,
-    app: &mut App,
-    command: &str,
-    cwd: &Path,
-) -> io::Result<()> {
+/// Leave the file manager's screen: cooked mode, main screen, cursor back.
+fn leave_ui() -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
-    println!("$ {command}");
-    // On a pty, so the output is shown live *and* kept for Ctrl+O.
-    let result = runcmd::run_in_pty(command, cwd);
-    let (note, message) = match &result {
-        Ok(out) => {
-            let note = match out.exit {
-                Some(code) => format!("exit {code}"),
-                None => "killed by a signal".to_string(),
-            };
-            (note, format!("{}  (Ctrl+O: output)", out.summary()))
-        }
-        Err(err) => (format!("error: {err}"), format!("error: {err}")),
-    };
-    if let Ok(out) = result {
-        app.session.last_run = Some(out);
-    }
-    print!("\n[{note}] press Enter to return to {APP_NAME}… ");
+    execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)
+}
+
+/// Wait for Enter (so output can be read), then come back to the file manager.
+fn return_to_ui(guard: &mut TerminalGuard, note: &str) -> io::Result<()> {
+    print!("\x1b[0m\n[{note}] press Enter to return to {APP_NAME}… ");
     io::stdout().flush()?;
     let mut line = String::new();
     let _ = io::stdin().read_line(&mut line);
@@ -234,12 +218,71 @@ fn run_in_terminal(
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
     guard.terminal.clear()?;
-    // Keys typed while the command ran must not drive the file manager.
+    // Keys typed while the terminal was shown must not drive the file manager.
     while event::poll(Duration::ZERO)? {
         let _ = event::read()?;
     }
+    Ok(())
+}
+
+fn exit_note(out: &runcmd::RunOutcome) -> String {
+    match (out.exit, out.detached) {
+        (_, true) => "still running".to_string(),
+        (Some(code), _) => format!("exit {code}"),
+        (None, _) => "killed by a signal".to_string(),
+    }
+}
+
+/// Hand the terminal to `command` like a shell would: leave the alternate
+/// screen, run it on a pty wired to the real terminal, wait for Enter so its
+/// output can be read, then come back and refresh both panes.
+fn run_in_terminal(
+    guard: &mut TerminalGuard,
+    app: &mut App,
+    command: &str,
+    cwd: &Path,
+) -> io::Result<()> {
+    leave_ui()?;
+    println!("$ {command}");
+    // On a pty, so the output is shown live *and* kept for Ctrl+O.
+    let result = runcmd::run_in_pty(command, cwd);
+    let (note, message) = match &result {
+        Ok(out) => (
+            exit_note(out),
+            format!("{}  (Ctrl+O: show it again)", out.summary()),
+        ),
+        Err(err) => (format!("error: {err}"), format!("error: {err}")),
+    };
+    if let Ok(out) = result {
+        app.session.last_run = Some(out);
+    }
+    return_to_ui(guard, &note)?;
     app.session.reload_all();
     app.set_message(message);
+    Ok(())
+}
+
+/// Ctrl+O: show the terminal as the last command left it — its recorded
+/// output replayed on the real screen, like switching to the shell and back.
+fn show_last_in_terminal(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
+    let Some(run) = app.session.last_run.as_ref() else {
+        return Ok(());
+    };
+    let (command, bytes, note, truncated) = (
+        run.command.clone(),
+        run.replay_bytes_cooked(),
+        exit_note(run),
+        run.truncated,
+    );
+    leave_ui()?;
+    let mut out = io::stdout();
+    writeln!(out, "$ {command}")?;
+    out.write_all(&bytes)?;
+    if truncated {
+        write!(out, "\x1b[0m\n[output was cut at 4 MiB]")?;
+    }
+    return_to_ui(guard, &note)?;
+    app.set_message("back from the last command's output");
     Ok(())
 }
 

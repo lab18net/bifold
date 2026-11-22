@@ -32,9 +32,13 @@ program wants to use, the desktop one has none.
      that is still running is **left running**, not killed — it may be a GUI
      program the user just launched — and its partial output is shown.
 4. One command at a time in the GUI, matching the one-transfer rule.
-5. **`Ctrl+O` (`Action::LastOutput`)** shows the last run in the viewer
-   (`PreviewKind::Output`). The record (`Session::last_run`) lives in core and
-   is filled by whichever runner the front end used, so both behave the same.
+5. **`Ctrl+O` (`Action::LastOutput`)** shows the last run again. The record
+   (`Session::last_run`) lives in core and is filled by whichever runner the
+   front end used. The terminal front end replays the recorded raw pty stream
+   on the real screen (`RunOutcome::replay_bytes_cooked`, with DEC private mode
+   switches stripped so a full-screen program cannot hijack the replay) and
+   waits for Enter; the desktop shows the text in the viewer
+   (`PreviewKind::Output`).
 
 ## Consequences
 

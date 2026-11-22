@@ -454,15 +454,12 @@ fn draw_viewer(
         viewer.preview.title(),
         human_size(viewer.preview.size)
     );
-    // Command output has no file behind it, so there is no hex view to offer.
-    let mut hints = vec![(ViewerAction::Up, "scroll")];
-    if viewer.preview.kind != bifold_core::preview::PreviewKind::Output {
-        hints.push((ViewerAction::ToggleHex, "hex"));
-    }
-    hints.extend([
+    let hints = [
+        (ViewerAction::Up, "scroll"),
+        (ViewerAction::ToggleHex, "hex"),
         (ViewerAction::ToggleWrap, "wrap"),
         (ViewerAction::Close, "close"),
-    ]);
+    ];
     let hint = keymap.viewer_hints(&hints);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -926,29 +923,6 @@ mod tests {
         let screen = render(&mut app, 100, 20);
         assert!(screen.contains("Run in"), "{screen}");
         assert!(screen.contains("$: ./go.sh"), "{screen}");
-    }
-
-    #[test]
-    fn output_viewer_does_not_offer_hex() {
-        let (dir, mut app) = fixture();
-        app.session.last_run = Some(
-            bifold_core::runcmd::run_captured(
-                "echo hi",
-                dir.path(),
-                bifold_core::runcmd::DEFAULT_TIMEOUT,
-            )
-            .unwrap(),
-        );
-        app.on_key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('o'),
-            crossterm::event::KeyModifiers::CONTROL,
-        ));
-        let screen = render(&mut app, 100, 12);
-        assert!(
-            screen.contains("[output]") && screen.contains("close"),
-            "{screen}"
-        );
-        assert!(!screen.contains("x hex"), "{screen}");
     }
 
     #[test]

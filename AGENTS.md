@@ -72,7 +72,8 @@ cargo run -p bifold-gui -- --path ~/src
 12. **Commands run through `core::runcmd`.** A front end never spawns a shell
    itself: the TUI uses `run_in_pty` (after leaving the alternate screen),
    the GUI uses `run_captured` on a worker thread, and both store the result
-   in `Session::last_run` (viewed with `Ctrl+O`). Output is capped, a slow
+   in `Session::last_run` (`Ctrl+O`: the TUI replays it on the terminal, the
+   GUI shows it in the viewer). Output is capped, a slow
    command is detached rather than killed, and `Session::run_suggestion`
    decides when Enter offers a run line.
 13. **The config file belongs to the user.** `Config::save_to` (a full
