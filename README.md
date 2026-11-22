@@ -163,8 +163,26 @@ goto refresh help cancel cycle_theme toggle_hints last_output`.
 Actions (`[viewer_keys]`): `close up down page_up page_down top bottom
 toggle_wrap toggle_hex`.
 
-Dialog keys (`y`/`n` in confirmations, `Esc`/`Enter` in prompts), `h`, and the
-tab keys inside the help screen are not configurable.
+Dialog keys (`y`/`n` in confirmations, `Esc`/`Enter`/`Tab` in prompts), `h`, and
+the tab keys inside the help screen are not configurable.
+
+### Tab completion in inputs
+
+`Tab` completes in every text input, in both front ends (`Shift+Tab` goes
+back):
+
+| Input | Completes |
+|---|---|
+| Go to, copy/move destination | folders |
+| New file / folder, rename, filter | files and folders of the active folder |
+| Run line (Enter on an executable) | the last word as a path with shell quoting (`my\ file`); the first word as a program on `PATH` |
+
+Bash-like: a unique match is filled in (a folder gets `/`; in the run line a
+file gets a space and an open quote is closed). With several matches the text
+grows to their common prefix and the candidates are listed; `Tab` again, with
+nothing left to add, cycles through them. Hidden entries are offered only after
+you type a dot, `~` expands to your home folder, and paths may be absolute or
+relative to the active folder (`../` included). Typing anything ends the cycle.
 
 ### Viewer and previewer
 
@@ -299,7 +317,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 190 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 219 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

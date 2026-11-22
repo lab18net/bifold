@@ -58,7 +58,8 @@ cargo run -p bifold-gui -- --path ~/src
    action needs an entry in the `actions!` macro, a default binding and a README
    mention (a test fails if an action is unbound by default). Exactly three
    things are fixed and handled outside the keymap: `h` (help, `help::is_help_key`),
-   dialog keys (y/n, Enter, Esc) and tab keys inside the help screen. Help
+   dialog keys (y/n, Enter, Esc, Tab for completion) and tab keys inside the
+   help screen. Help
    content lives in `core::help` and is generated from the live keymap — add
    notes there once, never in a UI crate.
 10. **The viewer is `core::preview`.** Front ends render `Preview.lines`

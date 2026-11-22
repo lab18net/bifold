@@ -169,7 +169,7 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
             "Filter takes plain text, or * and ? globs (*.md). Esc clears the filter and the marks.",
         ),
         note(
-            "Go-to accepts ~/paths. Sort key and order, and hidden files, are remembered when you quit.",
+            "Tab completes folders, names and programs in every input (Shift+Tab goes back). Sort key and order, and hidden files, are remembered when you quit.",
         ),
     ];
 

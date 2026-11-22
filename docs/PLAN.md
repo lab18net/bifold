@@ -24,6 +24,7 @@
 - [ ] **Persist per-pane history and marks** across restarts
 - [x] Keybinding config (`[keys]` / `[viewer_keys]`, ADR-003)
 - [x] Binary files: hex dump + lf-style `previewer`
+- [x] Tab completion in every text input (paths, folders, programs on `PATH`, shell quoting)
 - [x] Enter on an executable shows an editable run line; Enter runs it; Ctrl+O shows its output (ADR-005)
 - [x] Themes: herdr palettes (terminal, nord, gruvbox, solarized + light variants) and user theme files (ADR-004)
 - [ ] Follow the host's light/dark appearance (herdr's `auto_switch`) instead of a fixed theme

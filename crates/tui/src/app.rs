@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use bifold_core::complete::{Completer, InputKind, Tab};
 use bifold_core::error::Result;
 use bifold_core::fsops::{self, DeleteMode};
 use bifold_core::help;
@@ -37,6 +38,15 @@ impl PromptKind {
         }
     }
 
+    /// What Tab completes in this prompt.
+    pub fn input_kind(self) -> InputKind {
+        match self {
+            Self::GoTo | Self::CopyTo | Self::MoveTo => InputKind::Dir,
+            Self::Run => InputKind::Command,
+            Self::Filter | Self::MkDir | Self::NewFile | Self::Rename => InputKind::Path,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Filter => "pattern",
@@ -53,6 +63,9 @@ pub struct Prompt {
     pub kind: PromptKind,
     pub value: String,
     pub title: String,
+    /// Tab completion state, and what the last Tab press has to show.
+    pub completer: Completer,
+    pub tab: Tab,
 }
 
 #[derive(Debug, Clone)]
@@ -199,16 +212,33 @@ impl App {
                 Mode::Normal
             }
             KeyCode::Enter => self.submit_prompt(&prompt),
+            // Tab completion is a dialog key: fixed, not in the keymap.
+            KeyCode::Tab | KeyCode::BackTab => {
+                let backwards = key.code == KeyCode::BackTab;
+                let cwd = self.session.pane().path.clone();
+                let result =
+                    prompt
+                        .completer
+                        .tab(prompt.kind.input_kind(), &prompt.value, &cwd, backwards);
+                if let Some(text) = result.text.clone() {
+                    prompt.value = text;
+                }
+                prompt.tab = result;
+                Mode::Prompt(prompt)
+            }
             KeyCode::Backspace => {
                 prompt.value.pop();
+                prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
             KeyCode::Char('u') if ctrl => {
                 prompt.value.clear();
+                prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
             KeyCode::Char(ch) if !ctrl => {
                 prompt.value.push(ch);
+                prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
             _ => Mode::Prompt(prompt),
@@ -349,7 +379,13 @@ impl App {
             PromptKind::Run => format!("Run in {}", self.session.pane().path.display()),
             _ => kind.title().to_string(),
         };
-        Mode::Prompt(Prompt { kind, value, title })
+        Mode::Prompt(Prompt {
+            kind,
+            value,
+            title,
+            completer: Completer::default(),
+            tab: Tab::default(),
+        })
     }
 
     fn submit_prompt(&mut self, prompt: &Prompt) -> Mode {
@@ -993,5 +1029,175 @@ mod tests {
         assert!(!app.show_terminal, "ctrl+o is unbound now");
         app.on_key(key(KeyCode::Char('O')));
         assert!(app.show_terminal);
+    }
+
+    /// A folder with a few things to complete, active pane on the left.
+    fn completion_fixture() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("left");
+        fs::create_dir(&left).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        for d in ["docs", "downloads", "src", "my dir"] {
+            fs::create_dir(left.join(d)).unwrap();
+        }
+        for f in ["notes.txt", "notes.md", "my file.txt"] {
+            fs::write(left.join(f), "x").unwrap();
+        }
+        let session = Session::new_at(&left, &dir.path().join("right"));
+        (dir, App::new(session))
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            app.on_key(key(KeyCode::Char(ch)));
+        }
+    }
+
+    /// Ctrl+U: empty the prompt (Go to is prefilled with the current path).
+    fn clear_prompt(app: &mut App) {
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    }
+
+    fn prompt_value(app: &App) -> String {
+        match &app.mode {
+            Mode::Prompt(p) => p.value.clone(),
+            other => panic!("expected a prompt, got {other:?}"),
+        }
+    }
+
+    fn prompt_tab(app: &App) -> bifold_core::complete::Tab {
+        match &app.mode {
+            Mode::Prompt(p) => p.tab.clone(),
+            other => panic!("expected a prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tab_completes_a_folder_in_the_go_to_prompt() {
+        let (_dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::Char('g')));
+        clear_prompt(&mut app);
+        type_text(&mut app, "sr");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(prompt_value(&app), "src/");
+        assert!(
+            matches!(app.mode, Mode::Prompt(_)),
+            "Tab does not submit or switch panes"
+        );
+        assert_eq!(
+            app.session.active, LEFT,
+            "Tab inside a prompt must not switch panes"
+        );
+    }
+
+    #[test]
+    fn go_to_only_offers_folders_and_cycles_with_tab_and_shift_tab() {
+        let (_dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::Char('g')));
+        clear_prompt(&mut app);
+        type_text(&mut app, "do");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            "docs/",
+            "nothing common to add after `do`, so the first Tab cycles"
+        );
+        assert_eq!(prompt_tab(&app).listing, ["docs/", "downloads/"]);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(prompt_value(&app), "downloads/");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(prompt_value(&app), "docs/", "wraps");
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(prompt_value(&app), "downloads/", "Shift+Tab goes back");
+    }
+
+    #[test]
+    fn typing_after_tab_clears_the_list_and_restarts_completion() {
+        let (_dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::Char('g')));
+        clear_prompt(&mut app);
+        type_text(&mut app, "do");
+        app.on_key(key(KeyCode::Tab));
+        assert!(!prompt_tab(&app).listing.is_empty());
+        app.on_key(key(KeyCode::Backspace));
+        assert!(
+            prompt_tab(&app).listing.is_empty(),
+            "an edit clears the list"
+        );
+        app.on_key(key(KeyCode::Backspace));
+        app.on_key(key(KeyCode::Backspace));
+        assert_eq!(prompt_value(&app), "do");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            "docs/",
+            "a fresh completion, not the next candidate"
+        );
+    }
+
+    #[test]
+    fn rename_and_new_file_complete_names_in_the_folder() {
+        let (_dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::F(7))); // mkdir prompt
+        type_text(&mut app, "sr");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(prompt_value(&app), "src/");
+        app.on_key(key(KeyCode::Esc));
+
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        type_text(&mut app, "no");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            "notes.",
+            "files too, up to the common prefix"
+        );
+    }
+
+    #[test]
+    fn run_line_escapes_spaces_and_completes_arguments() {
+        let (_dir, mut app) = completion_fixture();
+        // F3-less way in: open a run prompt directly.
+        app.mode = app.prompt(PromptKind::Run, Some("cat my".into()));
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            "cat my\\ ",
+            "common prefix `my ` shell-escaped"
+        );
+        type_text(&mut app, "f");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            "cat my\\ file.txt ",
+            "unique file: escaped, with a space after"
+        );
+    }
+
+    #[test]
+    fn no_match_is_reported_and_the_text_is_kept() {
+        let (_dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::Char('g')));
+        clear_prompt(&mut app);
+        type_text(&mut app, "zzz");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(prompt_value(&app), "zzz");
+        assert_eq!(prompt_tab(&app).message.as_deref(), Some("no match"));
+    }
+
+    #[test]
+    fn copy_destination_completes_absolute_paths() {
+        let (dir, mut app) = completion_fixture();
+        app.on_key(key(KeyCode::F(5)));
+        // The prompt is prefilled with the other pane; replace it with a typed path.
+        for _ in 0..200 {
+            app.on_key(key(KeyCode::Backspace));
+        }
+        type_text(&mut app, &format!("{}/le", dir.path().display()));
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            prompt_value(&app),
+            format!("{}/left/", dir.path().display())
+        );
     }
 }

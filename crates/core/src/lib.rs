@@ -4,6 +4,7 @@
 //! GUI (`bifold-gui`) render the same [`Session`] and drive the same
 //! [`fsops`] functions, so behaviour never drifts between the two front ends.
 
+pub mod complete;
 pub mod config;
 pub mod entry;
 pub mod error;

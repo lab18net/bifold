@@ -349,6 +349,56 @@ fn draw_prompt(frame: &mut Frame, pal: &Pal, prompt: &Prompt, area: Rect) {
         Span::styled("▏", Style::new().fg(pal.accent)),
     ]);
     frame.render_widget(Paragraph::new(line), inner);
+    if inner.height > 1 {
+        let row = Rect {
+            y: inner.y + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(
+            Paragraph::new(completion_line(pal, prompt, row.width as usize)),
+            row,
+        );
+    }
+}
+
+/// The second prompt row: the candidates from the last Tab (the one just
+/// inserted highlighted), a note such as "no match", or a quiet reminder.
+fn completion_line(pal: &Pal, prompt: &Prompt, width: usize) -> Line<'static> {
+    let tab = &prompt.tab;
+    if let Some(note) = &tab.message {
+        return Line::from(Span::styled(note.clone(), Style::new().fg(pal.warn)));
+    }
+    if tab.listing.is_empty() {
+        return Line::from(Span::styled("Tab completes", Style::new().fg(pal.faint)));
+    }
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (i, label) in tab.listing.iter().enumerate() {
+        let cost = label.chars().count() + 2;
+        if used + cost > width.saturating_sub(8) && i > 0 {
+            spans.push(Span::styled(
+                format!("… +{}", tab.listing.len() - i + tab.more),
+                Style::new().fg(pal.faint),
+            ));
+            return Line::from(spans);
+        }
+        let style = if tab.current == Some(i) {
+            Style::new().fg(pal.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(pal.dim)
+        };
+        spans.push(Span::styled(label.clone(), style));
+        spans.push(Span::raw("  "));
+        used += cost;
+    }
+    if tab.more > 0 {
+        spans.push(Span::styled(
+            format!("+{} more", tab.more),
+            Style::new().fg(pal.faint),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn draw_confirm(frame: &mut Frame, pal: &Pal, confirm: &Confirm, area: Rect) {
@@ -974,5 +1024,63 @@ mod tests {
             let screen = render(&mut app, w, h);
             assert!(!screen.contains("h help"), "{w}x{h}: {screen}");
         }
+    }
+
+    #[test]
+    fn the_prompt_lists_candidates_and_highlights_the_cycled_one() {
+        let (dir, mut app) = fixture();
+        fs::create_dir(dir.path().join("left/docs")).unwrap();
+        fs::create_dir(dir.path().join("left/downloads")).unwrap();
+        app.session.pane_mut().reload();
+        press(&mut app, 'g');
+        // Go to is prefilled with the current path: start from an empty line.
+        app.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('u'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert!(
+            render(&mut app, 100, 14).contains("Tab completes"),
+            "a quiet reminder before the first Tab"
+        );
+        press(&mut app, 'd');
+        press(&mut app, 'o');
+        app.on_key(key(crossterm::event::KeyCode::Tab));
+        let screen = render(&mut app, 100, 14);
+        assert!(
+            screen.contains("docs/") && screen.contains("downloads/"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("docs/▏"),
+            "the input shows the inserted candidate: {screen}"
+        );
+        press(&mut app, 'x');
+        app.on_key(key(crossterm::event::KeyCode::Tab));
+        assert!(render(&mut app, 100, 14).contains("no match"));
+    }
+
+    #[test]
+    fn completion_rows_survive_narrow_terminals() {
+        let (dir, mut app) = fixture();
+        for i in 0..40 {
+            fs::create_dir(dir.path().join(format!("left/folder-number-{i:02}"))).unwrap();
+        }
+        app.session.pane_mut().reload();
+        press(&mut app, 'g');
+        app.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('u'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        press(&mut app, 'f');
+        app.on_key(key(crossterm::event::KeyCode::Tab));
+        for (w, h) in [(12, 4), (30, 6), (60, 10), (200, 60)] {
+            let screen = render(&mut app, w, h);
+            assert!(!screen.is_empty(), "{w}x{h}");
+        }
+        let wide = render(&mut app, 100, 14);
+        assert!(
+            wide.contains("more") || wide.contains('…'),
+            "a long list is cut with a count: {wide}"
+        );
     }
 }

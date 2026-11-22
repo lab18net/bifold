@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
+use bifold_core::complete::{Completer, InputKind, Tab};
 use bifold_core::config::Config;
 use bifold_core::error::Result;
 use bifold_core::format::{ellipsis_left, ellipsis_right, human_size, short_time};
@@ -278,6 +279,16 @@ impl DialogKind {
         }
     }
 
+    /// What Tab completes in this dialog (`None`: no text input).
+    fn input_kind(&self) -> Option<InputKind> {
+        match self {
+            Self::GoTo | Self::CopyTo | Self::MoveTo => Some(InputKind::Dir),
+            Self::Run => Some(InputKind::Command),
+            Self::Filter | Self::MkDir | Self::NewFile | Self::Rename => Some(InputKind::Path),
+            Self::Delete { .. } => None,
+        }
+    }
+
     fn needs_text(&self) -> bool {
         !matches!(self, Self::Delete { .. })
     }
@@ -336,6 +347,10 @@ struct GuiApp {
     viewer: Option<ViewerState>,
     /// A command running in the background: its text and where the result arrives.
     running: Option<RunningCommand>,
+    /// Tab completion in dialogs: the state, and the last result together with
+    /// the text it produced (the list is shown only while the text is unchanged).
+    completer: Completer,
+    tab_view: Option<(String, Tab)>,
     help: bool,
     help_tab: usize,
     /// The toolbar filter box has keyboard focus: let it have the keys.
@@ -354,6 +369,8 @@ impl GuiApp {
             session,
             dialog: None,
             running: None,
+            completer: Completer::default(),
+            tab_view: None,
             viewer: None,
             help: false,
             help_tab: 0,
@@ -823,6 +840,9 @@ impl GuiApp {
         let mut submit = false;
         let mut cancel = false;
         let title = dialog.kind.title();
+        let cwd = self.session.pane().path.clone();
+        let completer = &mut self.completer;
+        let tab_view = &mut self.tab_view;
 
         egui::Window::new(title)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -836,10 +856,51 @@ impl GuiApp {
                             .size(11.0)
                             .color(pal.dim),
                     );
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut dialog.text).desired_width(f32::INFINITY),
-                    );
+                    // Tab completes: a dialog key, fixed like Enter and Esc. egui would
+                    // move focus, so keep Tab in the field and consume it here
+                    // (Shift+Tab first: `consume_key` ignores an extra Shift).
+                    let input_id = egui::Id::new("bifold-dialog-input");
+                    ui.memory_mut(|m| {
+                        m.set_focus_lock_filter(
+                            input_id,
+                            egui::EventFilter {
+                                tab: true,
+                                horizontal_arrows: false,
+                                vertical_arrows: false,
+                                escape: false,
+                            },
+                        )
+                    });
+                    let (back, forward) = ui.input_mut(|i| {
+                        (
+                            i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                        )
+                    });
+                    let tabbed = back || forward;
+                    if tabbed && let Some(kind) = dialog.kind.input_kind() {
+                        let result = completer.tab(kind, &dialog.text, &cwd, back);
+                        if let Some(text) = &result.text {
+                            dialog.text = text.clone();
+                        }
+                        *tab_view = Some((dialog.text.clone(), result));
+                    }
+                    let mut output = egui::TextEdit::singleline(&mut dialog.text)
+                        .id(input_id)
+                        .desired_width(f32::INFINITY)
+                        .show(ui);
+                    if tabbed {
+                        // The cursor belongs at the end of what was just filled in.
+                        let end = egui::text::CCursor::new(dialog.text.chars().count());
+                        output
+                            .state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                        output.state.store(ui.ctx(), output.response.id);
+                    }
+                    let response = output.response;
                     response.request_focus();
+                    show_completions(ui, &pal, tab_view.as_ref(), &dialog.text);
                     if ui.input(|i| i.key_pressed(egui::Key::Enter))
                         && (response.has_focus() || response.lost_focus())
                     {
@@ -1357,6 +1418,44 @@ impl GuiApp {
         }
         let _ = self.session.save_config();
     }
+}
+
+/// Under a dialog's text field: the candidates of the last Tab (the cycled one
+/// highlighted), "no match", or a quiet reminder. The list only counts while
+/// the text is the one Tab produced; any edit drops it.
+fn show_completions(ui: &mut egui::Ui, pal: &Pal, view: Option<&(String, Tab)>, text: &str) {
+    let live = view
+        .filter(|(shown_for, _)| shown_for == text)
+        .map(|(_, tab)| tab);
+    let Some(tab) = live.filter(|t| !t.listing.is_empty() || t.message.is_some()) else {
+        ui.label(
+            egui::RichText::new("Tab completes")
+                .size(11.0)
+                .color(pal.faint),
+        );
+        return;
+    };
+    if let Some(note) = &tab.message {
+        ui.label(egui::RichText::new(note).size(11.0).color(pal.warn));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (i, label) in tab.listing.iter().enumerate() {
+            let text = egui::RichText::new(label).monospace().size(11.0);
+            if tab.current == Some(i) {
+                ui.label(text.strong().color(pal.accent));
+            } else {
+                ui.label(text.color(pal.dim));
+            }
+        }
+        if tab.more > 0 {
+            ui.label(
+                egui::RichText::new(format!("+{} more", tab.more))
+                    .size(11.0)
+                    .color(pal.faint),
+            );
+        }
+    });
 }
 
 /// Key presses of this frame, in the shared key vocabulary.
@@ -2089,5 +2188,121 @@ mod tests {
             !run_frames(&mut app, 2).shapes.is_empty(),
             "the desktop has no hint line to hide"
         );
+    }
+
+    /// A dialog open and focused, with a few folders to complete.
+    fn completion_dialog(
+        kind: DialogKind,
+        text: &str,
+    ) -> (tempfile::TempDir, GuiApp, egui::Context) {
+        let (dir, mut app) = fixture();
+        for d in ["docs", "downloads", "src", "my dir"] {
+            fs::create_dir(dir.path().join("left").join(d)).unwrap();
+        }
+        fs::write(dir.path().join("left/my file.txt"), "x").unwrap();
+        app.session.reload_all();
+        app.dialog = Some(Dialog {
+            kind,
+            text: text.into(),
+        });
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut app); // the text field gets focus and its Tab filter
+        }
+        (dir, app, ctx)
+    }
+
+    fn dialog_text(app: &GuiApp) -> String {
+        app.dialog.as_ref().expect("dialog still open").text.clone()
+    }
+
+    #[test]
+    fn tab_completes_in_a_dialog_and_does_not_move_focus_or_switch_panes() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "sr");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(dialog_text(&app), "src/");
+        assert_eq!(
+            app.session.active, LEFT,
+            "Tab is not the switch-pane key inside a dialog"
+        );
+        // still focused: typing continues in the same field
+        frame(&ctx, &mut app);
+        assert!(app.dialog.is_some());
+    }
+
+    #[test]
+    fn tab_and_shift_tab_cycle_through_candidates() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "do");
+        let none = egui::Modifiers::NONE;
+        press(&ctx, &mut app, egui::Key::Tab, none);
+        assert_eq!(dialog_text(&app), "docs/");
+        press(&ctx, &mut app, egui::Key::Tab, none);
+        assert_eq!(dialog_text(&app), "downloads/");
+        press(&ctx, &mut app, egui::Key::Tab, none);
+        assert_eq!(dialog_text(&app), "docs/", "wraps");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::SHIFT);
+        assert_eq!(dialog_text(&app), "downloads/", "Shift+Tab goes back");
+        // the candidates are shown while the text is the one Tab produced
+        let (shown_for, tab) = app.tab_view.clone().expect("a result to show");
+        assert_eq!(shown_for, "downloads/");
+        assert_eq!(tab.listing, ["docs/", "downloads/"]);
+        assert_eq!(tab.current, Some(1));
+    }
+
+    #[test]
+    fn the_run_dialog_completes_with_shell_escaping() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::Run, "cat my");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(dialog_text(&app), "cat my\\ ");
+        app.dialog.as_mut().unwrap().text.push('f');
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(dialog_text(&app), "cat my\\ file.txt ");
+    }
+
+    #[test]
+    fn filename_dialogs_complete_files_and_folders_but_go_to_only_folders() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::Rename, "a");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(
+            dialog_text(&app),
+            "a.txt",
+            "files complete in a name dialog"
+        );
+
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "a");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(dialog_text(&app), "a", "a.txt is not a folder");
+        assert_eq!(
+            app.tab_view.as_ref().unwrap().1.message.as_deref(),
+            Some("no match")
+        );
+    }
+
+    #[test]
+    fn completion_lists_render_and_disappear_after_an_edit() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "do");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        let output = run_frames(&mut app, 2);
+        assert!(!output.shapes.is_empty());
+        // An edit makes the list stale: it is only shown for the text Tab produced.
+        app.dialog.as_mut().unwrap().text.push('x');
+        let live = app
+            .tab_view
+            .as_ref()
+            .filter(|(shown_for, _)| *shown_for == app.dialog.as_ref().unwrap().text);
+        assert!(live.is_none());
+        assert!(!run_frames(&mut app, 2).shapes.is_empty());
+    }
+
+    #[test]
+    fn tab_keeps_working_after_a_dialog_is_closed_and_reopened() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "do");
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        press(&ctx, &mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none());
+        frame(&ctx, &mut app);
+        // Back in the file list, Tab switches panes again.
+        press(&ctx, &mut app, egui::Key::Tab, egui::Modifiers::NONE);
+        assert_eq!(app.session.active, RIGHT);
     }
 }
