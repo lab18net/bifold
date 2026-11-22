@@ -6,8 +6,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::fsops::{self, DeleteMode, OpStats};
 use crate::job::{JobResult, JobRunner, Progress};
+use crate::keys::{Action, Keymap};
 use crate::pane::Pane;
+use crate::preview::{self, Preview, PreviewOptions};
 use crate::sort::{SortDir, SortKey};
+use crate::theme::{self, Theme};
 
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
@@ -32,30 +35,113 @@ pub struct Session {
     pub active: usize,
     pub jobs: JobRunner,
     pub config: Config,
+    pub keymap: Keymap,
+    pub theme: Theme,
+    /// Where user themes are read from (`None` in tests).
+    pub themes_dir: Option<PathBuf>,
     /// Last status-line message (result of the previous operation).
     pub message: Option<String>,
 }
 
 impl Session {
     pub fn new(config: Config) -> Self {
+        Self::with_themes_dir(config, Config::themes_dir())
+    }
+
+    /// Like `new`, with an explicit user-theme directory (`None` = built-ins only).
+    pub fn with_themes_dir(config: Config, themes_dir: Option<PathBuf>) -> Self {
         let left = config.left_path();
         let right = config.right_path();
+        let (keymap, mut warnings) = config.keymap();
+        let (theme, theme_warnings) =
+            theme::resolve(&config.theme, themes_dir.as_deref(), &config.theme_custom);
+        warnings.extend(theme_warnings);
         let mut session = Self {
             panes: [Pane::new(left), Pane::new(right)],
             active: LEFT,
             jobs: JobRunner::new(),
             config,
-            message: None,
+            keymap,
+            theme,
+            themes_dir,
+            message: (!warnings.is_empty()).then(|| format!("config: {}", warnings.join("; "))),
         };
         session.apply_preferences();
         session
     }
 
     pub fn new_at(left: &Path, right: &Path) -> Self {
-        let mut session = Self::new(Config::default());
+        let mut session = Self::with_themes_dir(Config::default(), None);
         let _ = session.panes[LEFT].navigate(left);
         let _ = session.panes[RIGHT].navigate(right);
         session
+    }
+
+    /// Switch to another theme by name (user file or built-in). On failure the
+    /// current theme stays and the reason goes to the status line.
+    pub fn set_theme(&mut self, name: &str) -> bool {
+        let (theme, warnings) =
+            theme::resolve(name, self.themes_dir.as_deref(), &self.config.theme_custom);
+        if theme.name != theme::canonical_name(name) {
+            self.message = Some(format!("config: {}", warnings.join("; ")));
+            return false;
+        }
+        self.config.theme = theme.name.clone();
+        self.message = Some(if warnings.is_empty() {
+            format!("theme: {}", theme.name)
+        } else {
+            format!("theme: {} (config: {})", theme.name, warnings.join("; "))
+        });
+        self.theme = theme;
+        true
+    }
+
+    /// Pages of the `h` help screen for the current keymap, config and theme.
+    pub fn help_pages(&self) -> Vec<crate::help::HelpPage> {
+        let config_dir = Config::config_dir()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_else(|| "~/.config/bifold".to_string());
+        let ctx = crate::help::HelpContext {
+            config_dir,
+            theme: self.theme.name.clone(),
+            themes: self.theme_names(),
+        };
+        crate::help::pages(&self.keymap, &ctx)
+    }
+
+    pub fn theme_names(&self) -> Vec<String> {
+        theme::available(self.themes_dir.as_deref())
+    }
+
+    pub fn cycle_theme(&mut self) {
+        let names = self.theme_names();
+        let at = names
+            .iter()
+            .position(|n| *n == self.theme.name)
+            .unwrap_or(0);
+        let next = names[(at + 1) % names.len()].clone();
+        self.set_theme(&next);
+    }
+
+    /// Copy the live view state (sort, hidden files, theme, directories) into
+    /// the config and write it. Both front ends call this on exit.
+    pub fn save_config(&mut self) -> Result<PathBuf> {
+        let (show_hidden, sort, sort_desc) = {
+            let pane = self.pane();
+            (
+                pane.show_hidden,
+                pane.sort_key.label().to_string(),
+                pane.sort_dir == SortDir::Desc,
+            )
+        };
+        self.config.show_hidden = show_hidden;
+        self.config.sort = sort;
+        self.config.sort_desc = sort_desc;
+        self.config.theme = self.theme.name.clone();
+        let left = self.panes[LEFT].path.clone();
+        let right = self.panes[RIGHT].path.clone();
+        self.config.remember_dirs(&left, &right);
+        self.config.save()
     }
 
     /// Push config-level preferences into both panes.
@@ -115,6 +201,128 @@ impl Session {
 
     pub fn job_progress(&self) -> Option<Progress> {
         self.jobs.progress()
+    }
+
+    /// Run the actions that only touch pane state (navigation, marks, sort,
+    /// hidden files, refresh). Returns false for actions that need UI
+    /// (dialogs, viewer, quit) so the front end can handle them.
+    pub fn apply(&mut self, action: Action, page_height: usize) -> bool {
+        let handled = match action {
+            Action::SwitchPane => {
+                self.switch();
+                true
+            }
+            Action::Up => {
+                self.pane_mut().move_cursor(-1);
+                true
+            }
+            Action::Down => {
+                self.pane_mut().move_cursor(1);
+                true
+            }
+            Action::PageUp => {
+                self.pane_mut().page(-1, page_height);
+                true
+            }
+            Action::PageDown => {
+                self.pane_mut().page(1, page_height);
+                true
+            }
+            Action::Home => {
+                self.pane_mut().home();
+                true
+            }
+            Action::End => {
+                self.pane_mut().end();
+                true
+            }
+            Action::Parent => {
+                if !self.pane_mut().up() {
+                    self.message = Some("already at the filesystem root".into());
+                    return true;
+                }
+                true
+            }
+            Action::Back => {
+                self.pane_mut().back();
+                true
+            }
+            Action::Forward => {
+                self.pane_mut().forward();
+                true
+            }
+            Action::ToggleMark => {
+                let pane = self.pane_mut();
+                pane.toggle_select();
+                pane.move_cursor(1);
+                true
+            }
+            Action::MarkAll => {
+                self.pane_mut().select_all();
+                true
+            }
+            Action::ClearMarks => {
+                self.pane_mut().clear_selection();
+                true
+            }
+            Action::ToggleHidden => {
+                self.pane_mut().toggle_hidden();
+                true
+            }
+            Action::CycleSort => {
+                self.pane_mut().cycle_sort();
+                true
+            }
+            Action::ToggleSortOrder => {
+                self.pane_mut().toggle_sort_dir();
+                true
+            }
+            Action::CycleTheme => {
+                self.cycle_theme();
+                return true;
+            }
+            Action::Refresh => {
+                self.reload_all();
+                self.message = Some("refreshed".into());
+                return true;
+            }
+            Action::Cancel => {
+                let pane = self.pane_mut();
+                pane.clear_selection();
+                if !pane.filter.is_empty() {
+                    pane.set_filter("");
+                }
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            self.message = None;
+        }
+        handled
+    }
+
+    /// Options for the viewer built from config, for a viewport of `width` x `height` cells.
+    pub fn preview_options(&self, width: u16, height: u16, force_hex: bool) -> PreviewOptions {
+        let previewer = self.config.previewer.trim();
+        PreviewOptions {
+            previewer: (!previewer.is_empty()).then(|| previewer.to_string()),
+            timeout: std::time::Duration::from_millis(self.config.previewer_timeout_ms.max(1)),
+            width,
+            height,
+            force_hex,
+            ..Default::default()
+        }
+    }
+
+    pub fn preview(
+        &self,
+        path: &Path,
+        width: u16,
+        height: u16,
+        force_hex: bool,
+    ) -> Result<Preview> {
+        preview::load(path, &self.preview_options(width, height, force_hex))
     }
 
     // -- operations ---------------------------------------------------------
@@ -386,6 +594,59 @@ mod tests {
     }
 
     #[test]
+    fn apply_handles_navigation_and_leaves_ui_actions() {
+        let dir = fixture();
+        fs::write(dir.path().join("left/b.txt"), b"b").unwrap();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        assert!(session.apply(Action::Down, 10));
+        assert_eq!(session.pane().cursor, 1);
+        assert!(session.apply(Action::ToggleMark, 10));
+        assert_eq!(session.pane().selection_len(), 1);
+        assert!(session.apply(Action::Cancel, 10));
+        assert_eq!(session.pane().selection_len(), 0);
+        assert!(session.apply(Action::SwitchPane, 10));
+        assert_eq!(session.active, RIGHT);
+        for ui_action in [
+            Action::Copy,
+            Action::Quit,
+            Action::View,
+            Action::Help,
+            Action::Open,
+        ] {
+            assert!(!session.apply(ui_action, 10), "{ui_action:?}");
+        }
+    }
+
+    #[test]
+    fn bad_key_config_is_reported_at_startup() {
+        let mut config = Config::default();
+        config.keys.insert("x".into(), "teleport".into());
+        let session = Session::new(config);
+        assert!(
+            session.status().contains("teleport"),
+            "{}",
+            session.status()
+        );
+    }
+
+    #[test]
+    fn preview_uses_config_previewer_setting() {
+        let dir = fixture();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        assert!(session.preview_options(10, 5, false).previewer.is_none());
+        session.config.previewer = " /bin/true ".into();
+        session.config.previewer_timeout_ms = 250;
+        let options = session.preview_options(10, 5, true);
+        assert_eq!(options.previewer.as_deref(), Some("/bin/true"));
+        assert_eq!(options.timeout.as_millis(), 250);
+        assert!(options.force_hex);
+        let preview = session
+            .preview(&dir.path().join("left/a.txt"), 10, 5, true)
+            .unwrap();
+        assert_eq!(preview.kind, preview::PreviewKind::Hex);
+    }
+
+    #[test]
     fn switching_panes_changes_target_dir() {
         let dir = fixture();
         let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
@@ -397,6 +658,88 @@ mod tests {
         assert_eq!(
             session.target_dir(),
             fs::canonicalize(dir.path().join("left")).unwrap()
+        );
+    }
+
+    #[test]
+    fn set_theme_switches_reports_and_refuses_unknown() {
+        let dir = fixture();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        assert_eq!(session.theme.name, theme::DEFAULT_THEME);
+        assert!(session.set_theme("Solarized Light"));
+        assert_eq!(session.theme.name, "solarized-light");
+        assert_eq!(session.config.theme, "solarized-light");
+        assert_eq!(session.status(), "theme: solarized-light");
+        assert!(!session.set_theme("no-such-theme"));
+        assert_eq!(
+            session.theme.name, "solarized-light",
+            "unchanged on failure"
+        );
+        assert!(
+            session.status().contains("no-such-theme"),
+            "{}",
+            session.status()
+        );
+    }
+
+    #[test]
+    fn cycle_theme_visits_builtin_and_user_themes_then_wraps() {
+        let dir = fixture();
+        let themes = dir.path().join("themes");
+        fs::create_dir(&themes).unwrap();
+        fs::write(
+            themes.join("mine.toml"),
+            "extends = \"nord\"\naccent = \"#ff8800\"\n",
+        )
+        .unwrap();
+        let mut session = Session::with_themes_dir(Config::default(), Some(themes));
+        let names = session.theme_names();
+        assert_eq!(names.last().map(String::as_str), Some("mine"));
+        let mut seen = vec![session.theme.name.clone()];
+        for _ in 0..names.len() {
+            assert!(session.apply(Action::CycleTheme, 10));
+            seen.push(session.theme.name.clone());
+        }
+        assert_eq!(seen.first(), seen.last(), "wrapped around");
+        assert_eq!(
+            &seen[1..=names.len()]
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            &names.len()
+        );
+        assert!(seen.contains(&"mine".to_string()));
+    }
+
+    #[test]
+    fn config_theme_and_overrides_reach_the_session() {
+        let dir = fixture();
+        let themes = dir.path().join("themes");
+        fs::create_dir(&themes).unwrap();
+        fs::write(
+            themes.join("mine.toml"),
+            "extends = \"gruvbox\"\nred = \"#010203\"\n",
+        )
+        .unwrap();
+        let mut config = Config {
+            theme: "mine".into(),
+            ..Default::default()
+        };
+        config
+            .theme_custom
+            .insert("accent".into(), "#0a0b0c".into());
+        config.theme_custom.insert("nonsense".into(), "#fff".into());
+        let session = Session::with_themes_dir(config, Some(themes));
+        assert_eq!(session.theme.name, "mine");
+        assert_eq!(session.theme.red, Some(crate::style::Color::Rgb(1, 2, 3)));
+        assert_eq!(
+            session.theme.accent,
+            Some(crate::style::Color::Rgb(10, 11, 12))
+        );
+        assert!(
+            session.status().contains("nonsense"),
+            "{}",
+            session.status()
         );
     }
 }

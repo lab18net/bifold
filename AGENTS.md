@@ -51,6 +51,24 @@ cargo run -p bifold-gui -- --path ~/src
 7. **UI state lives in the UI crate.** Dialogs, viewer scroll, prompt buffers
    stay in `tui::app` / `gui::main`; core knows nothing about them.
 8. **No `unwrap()` on filesystem results outside tests.**
+9. **Keys are data.** Front ends translate native key events into
+   `core::keys::KeySpec` and run the `Action` the `Keymap` returns — never
+   match raw keys against behaviour in a UI crate. Pane-state actions live in
+   `Session::apply`; the UI crate handles only dialogs, viewer, quit. A new
+   action needs an entry in the `actions!` macro, a default binding and a README
+   mention (a test fails if an action is unbound by default). Exactly three
+   things are fixed and handled outside the keymap: `h` (help, `help::is_help_key`),
+   dialog keys (y/n, Enter, Esc) and tab keys inside the help screen. Help
+   content lives in `core::help` and is generated from the live keymap — add
+   notes there once, never in a UI crate.
+10. **The viewer is `core::preview`.** Front ends render `Preview.lines`
+   (`StyledLine`s) and never read files themselves. Previewer processes must
+   stay time-boxed and output-capped.
+11. **Colours come from `core::theme`.** A front end converts `Theme` tokens
+   to its own colour type once (`Pal` in both UI crates) and never hard-codes a
+   colour in a draw path. Semantic colours produced by core (`Color::Faint`,
+   `Color::Accent`) go through `Theme::resolve`. Tokens keep herdr's names; a
+   `None` token means "terminal default" and needs a fallback on the desktop.
 
 ## Adding a feature
 
@@ -58,7 +76,7 @@ cargo run -p bifold-gui -- --path ~/src
    directories).
 2. Expose it in the TUI (`app.rs` key handling → `ui.rs` rendering) and in the
    GUI (`toolbar`/`shortcuts`/`dialog`) — both, or say explicitly why not.
-3. Add or update the key table in `README.md` and the `HELP` text in
+3. Give it an `Action` and a default key in `crates/core/src/keys.rs`; add or update the key table in `README.md` and the `HELP` text in
    `crates/tui/src/main.rs` (a test asserts the help mentions the core keys).
 4. Run `make check`.
 
@@ -68,6 +86,8 @@ cargo run -p bifold-gui -- --path ~/src
   terminals must not panic.
 - `crates/gui/src/main.rs` drives a headless `egui::Context` and asserts shapes
   are produced, so a broken panel layout fails without a window.
+- `crates/core/src/keys.rs` and `preview.rs` cover key parsing/overrides and the
+  previewer subprocess (arguments, ANSI, timeout, fallback) with real scripts.
 - `crates/core/src/session.rs` covers copy/move/refusal paths end to end with
   the real job runner (poll until finished, no sleeps in production code).
 

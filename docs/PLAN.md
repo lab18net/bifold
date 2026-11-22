@@ -22,7 +22,14 @@
 - [ ] **Batch rename** (pattern + counter) with a dry-run preview
 - [ ] **Permissions / owner column** toggle (config field already reserved)
 - [ ] **Persist per-pane history and marks** across restarts
-- [ ] Keybinding config, or at least a documented `[keys]` table
+- [x] Keybinding config (`[keys]` / `[viewer_keys]`, ADR-003)
+- [x] Binary files: hex dump + lf-style `previewer`
+- [x] Themes: herdr palettes (terminal, nord, gruvbox, solarized + light variants) and user theme files (ADR-004)
+- [ ] Follow the host's light/dark appearance (herdr's `auto_switch`) instead of a fixed theme
+- [ ] Bold/underline/background tokens in themes (today: colours only)
+- [ ] Run the previewer off the UI thread (job runner) and cache its output
+- [ ] Live preview column (lf's main view) driven by the same previewer
+- [ ] Image previews (`cleaner`, kitty/sixel) in the TUI, texture in the GUI
 
 ## M2 — beyond the local disk
 

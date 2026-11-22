@@ -2,6 +2,7 @@
 //!
 //! Every field has a default, so a missing or partial file is fine.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::fsops::{self, DeleteMode};
+use crate::keys::Keymap;
 use crate::sort::{SortDir, SortKey};
+use crate::theme;
 
 pub const APP_DIR: &str = "bifold";
 pub const FILE_NAME: &str = "config.toml";
@@ -32,6 +35,22 @@ pub struct Config {
     /// Opened by the "edit" action; empty means `$EDITOR` or `vi`.
     pub editor: String,
     pub show_permissions: bool,
+    /// lf-style previewer: `program [args…]` is run as
+    /// `program [args…] <file> <width> <height> <x> <y>`; its stdout (ANSI
+    /// colours allowed) becomes the viewer content. Empty = built-in viewer.
+    pub previewer: String,
+    /// Kill the previewer after this many milliseconds.
+    pub previewer_timeout_ms: u64,
+    /// Colour theme: a built-in (`bifold`, `terminal`, `nord`, `gruvbox`,
+    /// `gruvbox-light`, `solarized`, `solarized-light`) or a file in `themes/`.
+    pub theme: String,
+    /// Key overrides: `"ctrl+n" = "new_file"`, `"x" = "none"` to unbind.
+    /// Tables stay last: TOML needs plain values before tables.
+    pub keys: BTreeMap<String, String>,
+    /// Same for the viewer.
+    pub viewer_keys: BTreeMap<String, String>,
+    /// Per-token colour overrides applied on top of the selected theme.
+    pub theme_custom: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -50,6 +69,12 @@ impl Default for Config {
             confirm_delete: true,
             editor: String::new(),
             show_permissions: false,
+            previewer: String::new(),
+            previewer_timeout_ms: 3000,
+            theme: theme::DEFAULT_THEME.to_string(),
+            keys: BTreeMap::new(),
+            viewer_keys: BTreeMap::new(),
+            theme_custom: BTreeMap::new(),
         }
     }
 }
@@ -62,6 +87,11 @@ impl Config {
             return Some(PathBuf::from(xdg).join(APP_DIR));
         }
         fsops::home_dir().map(|home| home.join(".config").join(APP_DIR))
+    }
+
+    /// `<config dir>/themes`: one `<name>.toml` per user theme.
+    pub fn themes_dir() -> Option<PathBuf> {
+        Self::config_dir().map(|dir| theme::themes_dir_in(&dir))
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -95,6 +125,11 @@ impl Config {
             .map_err(|e| Error::invalid(format!("cannot serialize config: {e}")))?;
         fs::write(path, text).map_err(|e| Error::io(path, e))?;
         Ok(path.to_path_buf())
+    }
+
+    /// Default bindings with this config's overrides applied, plus any problems found.
+    pub fn keymap(&self) -> (Keymap, Vec<String>) {
+        Keymap::with_overrides(&self.keys, &self.viewer_keys)
     }
 
     pub fn left_path(&self) -> PathBuf {
@@ -182,6 +217,55 @@ mod tests {
         let path = dir.path().join("config.toml");
         fs::write(&path, "this is not toml = = =").unwrap();
         assert!(Config::load_from(&path).is_err());
+    }
+
+    #[test]
+    fn keys_and_previewer_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "previewer = \"~/p.sh\"\nprevie_typo = 1\n[keys]\n\"ctrl+n\" = \"mkdir\"\n\"f8\" = \"none\"\n[viewer_keys]\nh = \"toggle_hex\"\n",
+        )
+        .unwrap();
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.previewer, "~/p.sh");
+        assert_eq!(loaded.previewer_timeout_ms, 3000, "default kept");
+        let (keymap, warnings) = loaded.keymap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        use crate::keys::{Action, KeySpec};
+        assert_eq!(
+            keymap.action(&KeySpec::parse("ctrl+n").unwrap()),
+            Some(Action::MkDir)
+        );
+        assert_eq!(keymap.action(&KeySpec::parse("f8").unwrap()), None);
+
+        let saved = dir.path().join("saved.toml");
+        loaded.save_to(&saved).unwrap();
+        let again = Config::load_from(&saved).unwrap();
+        assert_eq!(again.keys.get("ctrl+n").map(String::as_str), Some("mkdir"));
+        assert_eq!(again.viewer_keys.len(), 1);
+    }
+
+    #[test]
+    fn theme_settings_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = Config {
+            theme: "nord".into(),
+            ..Default::default()
+        };
+        config
+            .theme_custom
+            .insert("accent".into(), "#ff8800".into());
+        config.save_to(&path).unwrap();
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.theme, "nord");
+        assert_eq!(
+            loaded.theme_custom.get("accent").map(String::as_str),
+            Some("#ff8800")
+        );
+        assert_eq!(Config::default().theme, "bifold");
     }
 
     #[test]

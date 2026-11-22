@@ -10,11 +10,16 @@ pub mod error;
 pub mod filter;
 pub mod format;
 pub mod fsops;
+pub mod help;
 pub mod job;
+pub mod keys;
 pub mod pane;
 pub mod preview;
 pub mod session;
 pub mod sort;
+pub mod style;
+pub mod theme;
+mod theme_builtin;
 
 pub use entry::{Entry, EntryKind};
 pub use error::{Error, Result};

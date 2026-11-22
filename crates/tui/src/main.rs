@@ -31,18 +31,23 @@ OPTIONS:
     -r, --right <PATH>   directory for the right pane
     -p, --path <PATH>    directory for both panes
         --dump           print both panes as plain text and exit
+        --dump-keys      print the effective key bindings as TOML and exit
+        --theme <NAME>   colour theme for this run (see --list-themes)
+        --list-themes    list built-in and user themes and exit
         --no-config      ignore ~/.config/bifold/config.toml
     -h, --help           show this help
     -V, --version        show the version
 
-KEYS:
+KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.toml):
     Tab switch pane          Enter / → enter directory or view file
     ↑ ↓ move cursor          ← / Backspace go up
-    Space mark item          F2 rename      F3 view      F5 copy
+    Space mark item          F2 rename      F3 view      F4 hex view   F5 copy
     F6 move                  F7 new folder  F8 delete
     Ctrl+A mark all          Ctrl+D clear marks
     . hidden files           s sort key     o sort order
-    / filter                 g go to path   r refresh     ? help   q quit
+    / filter                 g go to path   r refresh     h / ? help (h is fixed)   q quit
+    t cycle colour theme
+    In the viewer: x toggles hex, w wraps, Esc closes.
 ";
 
 #[derive(Debug, Default)]
@@ -51,6 +56,8 @@ struct Args {
     right: Option<PathBuf>,
     path: Option<PathBuf>,
     dump: bool,
+    dump_keys: bool,
+    theme: Option<String>,
     no_config: bool,
 }
 
@@ -68,6 +75,17 @@ fn parse_args() -> Result<Option<Args>, String> {
                 return Ok(None);
             }
             "--dump" => args.dump = true,
+            "--dump-keys" => args.dump_keys = true,
+            "--theme" => {
+                args.theme = Some(raw.next().ok_or("--theme needs a name")?);
+            }
+            "--list-themes" => {
+                print!(
+                    "{}",
+                    bifold_core::theme::list_text(Config::themes_dir().as_deref())
+                );
+                return Ok(None);
+            }
             "--no-config" => args.no_config = true,
             "-l" | "--left" => {
                 args.left = Some(take_path(&mut raw, "--left")?);
@@ -125,6 +143,18 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(right) = &args.right {
         config.right = right.display().to_string();
+    }
+    if let Some(theme) = &args.theme {
+        config.theme = theme.clone();
+    }
+
+    if args.dump_keys {
+        let (keymap, warnings) = config.keymap();
+        for warning in warnings {
+            eprintln!("{APP_NAME}: {warning}");
+        }
+        print!("{}", keymap.to_toml());
+        return Ok(ExitCode::SUCCESS);
     }
 
     let session = Session::new(config);
@@ -236,7 +266,18 @@ mod tests {
 
     #[test]
     fn help_text_documents_the_keys() {
-        for key in ["F5 copy", "F8 delete", "--dump", "Tab switch pane"] {
+        for key in [
+            "F5 copy",
+            "F8 delete",
+            "F4 hex",
+            "--dump",
+            "--dump-keys",
+            "--theme",
+            "--list-themes",
+            "t cycle colour theme",
+            "h / ? help",
+            "Tab switch pane",
+        ] {
             assert!(HELP.contains(key), "help must mention {key}");
         }
     }

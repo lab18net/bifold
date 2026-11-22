@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use bifold_core::error::Result;
 use bifold_core::fsops::{self, DeleteMode};
-use bifold_core::preview::{self, Preview};
-use bifold_core::session::{LEFT, RIGHT, Session};
-use bifold_core::sort::SortDir;
+use bifold_core::help;
+use bifold_core::keys::{Action, Key, KeySpec, ViewerAction};
+use bifold_core::preview::{Preview, PreviewKind};
+use bifold_core::session::Session;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +81,7 @@ pub enum Mode {
     Confirm(Confirm),
     Progress,
     Viewer(Viewer),
-    Help,
+    Help(usize),
 }
 
 pub struct App {
@@ -118,21 +119,7 @@ impl App {
         if !self.persist {
             return;
         }
-        let (show_hidden, sort, sort_desc) = {
-            let pane = self.session.pane();
-            (
-                pane.show_hidden,
-                pane.sort_key.label().to_string(),
-                pane.sort_dir == SortDir::Desc,
-            )
-        };
-        self.session.config.show_hidden = show_hidden;
-        self.session.config.sort = sort;
-        self.session.config.sort_desc = sort_desc;
-        let left = self.session.panes[LEFT].path.clone();
-        let right = self.session.panes[RIGHT].path.clone();
-        self.session.config.remember_dirs(&left, &right);
-        let _ = self.session.config.save();
+        let _ = self.session.save_config();
     }
 
     // -- key dispatch -------------------------------------------------------
@@ -145,120 +132,47 @@ impl App {
             Mode::Confirm(confirm) => self.handle_confirm(key, confirm),
             Mode::Progress => self.handle_progress(key),
             Mode::Viewer(viewer) => self.handle_viewer(key, viewer),
-            Mode::Help => self.handle_help(key),
+            Mode::Help(tab) => self.handle_help(key, tab),
         };
     }
 
     fn handle_normal(&mut self, key: KeyEvent) -> Mode {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let spec = key_spec(key);
+        // Fixed key: works whatever the keymap says.
+        if spec.as_ref().is_some_and(help::is_help_key) {
+            return Mode::Help(0);
+        }
+        let Some(action) = spec.and_then(|spec| self.session.keymap.action(&spec)) else {
+            return Mode::Normal;
+        };
         let pane_height = self.viewport[self.session.active].max(1);
+        if self.session.apply(action, pane_height) {
+            return Mode::Normal;
+        }
 
-        match key.code {
-            KeyCode::Char('c') if ctrl => {
+        match action {
+            Action::Quit => {
                 self.request_quit();
                 Mode::Normal
             }
-            KeyCode::Char('q') => {
-                self.request_quit();
-                Mode::Normal
+            Action::Open => self.open_cursor(),
+            Action::View => self.open_viewer(false),
+            Action::ViewHex => self.open_viewer(true),
+            Action::Rename => self.prompt(PromptKind::Rename, None),
+            Action::Copy => self.prompt(PromptKind::CopyTo, None),
+            Action::Move => self.prompt(PromptKind::MoveTo, None),
+            Action::MkDir => self.prompt(PromptKind::MkDir, None),
+            Action::NewFile => self.prompt(PromptKind::NewFile, None),
+            Action::Delete => self.confirm_delete(),
+            Action::Filter => {
+                let current = self.session.pane().filter.clone();
+                self.prompt(PromptKind::Filter, Some(current))
             }
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.session.switch();
-                Mode::Normal
+            Action::GoTo => {
+                let here = self.session.pane().path.display().to_string();
+                self.prompt(PromptKind::GoTo, Some(here))
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.session.pane_mut().move_cursor(-1);
-                Mode::Normal
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.session.pane_mut().move_cursor(1);
-                Mode::Normal
-            }
-            KeyCode::PageUp => {
-                self.session.pane_mut().page(-1, pane_height);
-                Mode::Normal
-            }
-            KeyCode::PageDown => {
-                self.session.pane_mut().page(1, pane_height);
-                Mode::Normal
-            }
-            KeyCode::Home => {
-                self.session.pane_mut().home();
-                Mode::Normal
-            }
-            KeyCode::End => {
-                self.session.pane_mut().end();
-                Mode::Normal
-            }
-            KeyCode::Left | KeyCode::Backspace => {
-                if !self.session.pane_mut().up() {
-                    self.set_message("already at the filesystem root");
-                }
-                Mode::Normal
-            }
-            KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => self.open_cursor(),
-            KeyCode::Char(' ') | KeyCode::Insert => {
-                let pane = self.session.pane_mut();
-                pane.toggle_select();
-                pane.move_cursor(1);
-                Mode::Normal
-            }
-            KeyCode::F(2) => self.prompt(PromptKind::Rename, None),
-            KeyCode::F(3) => self.open_viewer(),
-            KeyCode::F(5) => self.prompt(PromptKind::CopyTo, None),
-            KeyCode::F(6) => self.prompt(PromptKind::MoveTo, None),
-            KeyCode::F(7) => self.prompt(PromptKind::MkDir, None),
-            KeyCode::F(8) => self.confirm_delete(),
-            KeyCode::Char('n') if ctrl => self.prompt(PromptKind::NewFile, None),
-            KeyCode::Char('a') if ctrl => {
-                self.session.pane_mut().select_all();
-                Mode::Normal
-            }
-            KeyCode::Char('d') if ctrl => {
-                self.session.pane_mut().clear_selection();
-                Mode::Normal
-            }
-            KeyCode::Char('.') => {
-                self.session.pane_mut().toggle_hidden();
-                Mode::Normal
-            }
-            KeyCode::Char('s') => {
-                self.session.pane_mut().cycle_sort();
-                Mode::Normal
-            }
-            KeyCode::Char('o') => {
-                self.session.pane_mut().toggle_sort_dir();
-                Mode::Normal
-            }
-            KeyCode::Char('/') => {
-                self.prompt(PromptKind::Filter, Some(self.session.pane().filter.clone()))
-            }
-            KeyCode::Char('g') => self.prompt(
-                PromptKind::GoTo,
-                Some(self.session.pane().path.display().to_string()),
-            ),
-            KeyCode::Char('r') => {
-                self.session.reload_all();
-                self.set_message("refreshed");
-                Mode::Normal
-            }
-            KeyCode::Char('b') => {
-                self.session.pane_mut().back();
-                Mode::Normal
-            }
-            KeyCode::Char('f') => {
-                self.session.pane_mut().forward();
-                Mode::Normal
-            }
-            KeyCode::Char('?') => Mode::Help,
-            KeyCode::Esc => {
-                let pane = self.session.pane_mut();
-                pane.clear_selection();
-                if !pane.filter.is_empty() {
-                    pane.set_filter("");
-                }
-                Mode::Normal
-            }
+            Action::Help => Mode::Help(0),
             _ => Mode::Normal,
         }
     }
@@ -330,26 +244,62 @@ impl App {
     fn handle_viewer(&mut self, key: KeyEvent, mut viewer: Viewer) -> Mode {
         let page = self.viewport[self.session.active].max(1);
         let max_scroll = viewer.preview.lines.len().saturating_sub(1);
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(3) => return Mode::Normal,
-            KeyCode::Down | KeyCode::Char('j') => {
-                viewer.scroll = (viewer.scroll + 1).min(max_scroll)
+        let Some(action) = key_spec(key).and_then(|spec| self.session.keymap.viewer_action(&spec))
+        else {
+            return Mode::Viewer(viewer);
+        };
+        match action {
+            ViewerAction::Close => return Mode::Normal,
+            ViewerAction::Down => viewer.scroll = (viewer.scroll + 1).min(max_scroll),
+            ViewerAction::Up => viewer.scroll = viewer.scroll.saturating_sub(1),
+            ViewerAction::PageDown => viewer.scroll = (viewer.scroll + page).min(max_scroll),
+            ViewerAction::PageUp => viewer.scroll = viewer.scroll.saturating_sub(page),
+            ViewerAction::Top => viewer.scroll = 0,
+            ViewerAction::Bottom => viewer.scroll = max_scroll,
+            ViewerAction::ToggleWrap => viewer.wrap = !viewer.wrap,
+            ViewerAction::ToggleHex => {
+                let want_hex = viewer.preview.kind != PreviewKind::Hex;
+                let (width, height) = viewer_area();
+                match self
+                    .session
+                    .preview(&viewer.preview.path.clone(), width, height, want_hex)
+                {
+                    Ok(preview) => {
+                        viewer.preview = preview;
+                        viewer.scroll = 0;
+                    }
+                    Err(err) => self.set_message(format!("error: {err}")),
+                }
             }
-            KeyCode::Up | KeyCode::Char('k') => viewer.scroll = viewer.scroll.saturating_sub(1),
-            KeyCode::PageDown | KeyCode::Char(' ') => {
-                viewer.scroll = (viewer.scroll + page).min(max_scroll)
-            }
-            KeyCode::PageUp => viewer.scroll = viewer.scroll.saturating_sub(page),
-            KeyCode::Home | KeyCode::Char('g') => viewer.scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => viewer.scroll = max_scroll,
-            KeyCode::Char('w') => viewer.wrap = !viewer.wrap,
-            _ => {}
         }
         Mode::Viewer(viewer)
     }
 
-    fn handle_help(&mut self, _key: KeyEvent) -> Mode {
-        Mode::Normal
+    fn handle_help(&mut self, key: KeyEvent, tab: usize) -> Mode {
+        let count = help::TITLES.len();
+        let spec = key_spec(key);
+        let closes = spec.as_ref().is_some_and(|s| {
+            help::is_help_key(s)
+                || matches!(
+                    s.key,
+                    Key::Esc | Key::Char('q') | Key::Char('?') | Key::Enter
+                )
+                || self.session.keymap.action(s) == Some(Action::Help)
+        });
+        if closes {
+            return Mode::Normal;
+        }
+        let tab = match key.code {
+            KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => help::step(tab, 1, count),
+            KeyCode::Left | KeyCode::BackTab => help::step(tab, -1, count),
+            KeyCode::Home => 0,
+            KeyCode::End => count - 1,
+            KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < count => {
+                c as usize - '1' as usize
+            }
+            _ => tab,
+        };
+        Mode::Help(tab)
     }
 
     // -- actions ------------------------------------------------------------
@@ -460,11 +410,11 @@ impl App {
             }
             Mode::Normal
         } else {
-            self.viewer_for(&entry.path)
+            self.viewer_for(&entry.path, false)
         }
     }
 
-    fn open_viewer(&mut self) -> Mode {
+    fn open_viewer(&mut self, hex: bool) -> Mode {
         let Some(entry) = self.session.pane().cursor_entry().cloned() else {
             return Mode::Normal;
         };
@@ -472,11 +422,12 @@ impl App {
             self.set_message("F3 works on files; use Enter to open a folder");
             return Mode::Normal;
         }
-        self.viewer_for(&entry.path)
+        self.viewer_for(&entry.path, hex)
     }
 
-    fn viewer_for(&mut self, path: &std::path::Path) -> Mode {
-        match preview::load_default(path) {
+    fn viewer_for(&mut self, path: &std::path::Path, hex: bool) -> Mode {
+        let (width, height) = viewer_area();
+        match self.session.preview(path, width, height, hex) {
             Ok(preview) => Mode::Viewer(Viewer {
                 preview,
                 scroll: 0,
@@ -514,8 +465,44 @@ impl App {
     }
 }
 
+/// Translate a terminal key event into the shared key vocabulary.
+pub fn key_spec(key: KeyEvent) -> Option<KeySpec> {
+    let code = match key.code {
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Esc => Key::Esc,
+        KeyCode::Tab | KeyCode::BackTab => Key::Tab,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Insert => Key::Insert,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
+        KeyCode::F(n) => Key::F(n),
+        _ => return None,
+    };
+    Some(KeySpec::new(
+        code,
+        key.modifiers.contains(KeyModifiers::CONTROL),
+        key.modifiers.contains(KeyModifiers::ALT),
+        key.modifiers.contains(KeyModifiers::SHIFT) || key.code == KeyCode::BackTab,
+    ))
+}
+
+/// Cells inside the viewer's border, passed to the previewer as width/height.
+fn viewer_area() -> (u16, u16) {
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    (cols.saturating_sub(2).max(1), rows.saturating_sub(2).max(1))
+}
+
 #[cfg(test)]
 mod tests {
+    use bifold_core::session::{LEFT, RIGHT};
     use std::fs;
 
     use bifold_core::session::Session;
@@ -639,7 +626,9 @@ mod tests {
         let (_dir, mut app) = fixture();
         app.on_key(key(KeyCode::F(3)));
         match &app.mode {
-            Mode::Viewer(viewer) => assert!(viewer.preview.lines.iter().any(|l| l == "hello")),
+            Mode::Viewer(viewer) => {
+                assert!(viewer.preview.plain_lines().iter().any(|l| l == "hello"))
+            }
             other => panic!("expected viewer, got {other:?}"),
         }
         app.on_key(key(KeyCode::Esc));
@@ -660,5 +649,155 @@ mod tests {
                 .display()
                 .to_string()
         );
+    }
+
+    #[test]
+    fn binary_files_open_as_hex_and_toggle() {
+        let (dir, mut app) = fixture();
+        fs::write(dir.path().join("left/z.bin"), [0u8, 1, 2, 3, 0xff]).unwrap();
+        app.session.pane_mut().reload();
+        let at = app
+            .session
+            .pane()
+            .entries
+            .iter()
+            .position(|e| e.name == "z.bin")
+            .unwrap();
+        app.session.pane_mut().cursor = at;
+        app.on_key(key(KeyCode::F(3)));
+        match &app.mode {
+            Mode::Viewer(v) => {
+                assert_eq!(v.preview.kind, PreviewKind::Hex);
+                assert!(v.preview.lines[0].plain().contains("00 01 02 03 ff"));
+            }
+            other => panic!("expected viewer, got {other:?}"),
+        }
+        app.on_key(key(KeyCode::Esc));
+
+        // F4 forces hex on a text file; `x` toggles back to text.
+        let at = app
+            .session
+            .pane()
+            .entries
+            .iter()
+            .position(|e| e.name == "a.txt")
+            .unwrap();
+        app.session.pane_mut().cursor = at;
+        app.on_key(key(KeyCode::F(4)));
+        assert!(matches!(&app.mode, Mode::Viewer(v) if v.preview.kind == PreviewKind::Hex));
+        app.on_key(key(KeyCode::Char('x')));
+        assert!(matches!(&app.mode, Mode::Viewer(v) if v.preview.kind == PreviewKind::Text));
+    }
+
+    #[test]
+    fn config_rebinds_keys_in_both_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("left")).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        fs::write(dir.path().join("left/a.txt"), b"hello").unwrap();
+        let mut config = bifold_core::config::Config::default();
+        config.keys.insert("m".into(), "mkdir".into());
+        config.keys.insert("f7".into(), "none".into());
+        config.viewer_keys.insert("h".into(), "toggle_hex".into());
+        let mut session = Session::new(config);
+        let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
+        let mut app = App::new(session);
+
+        app.on_key(key(KeyCode::F(7)));
+        assert!(matches!(app.mode, Mode::Normal), "f7 was unbound");
+        app.on_key(key(KeyCode::Char('m')));
+        assert!(matches!(app.mode, Mode::Prompt(_)), "m now opens mkdir");
+        app.on_key(key(KeyCode::Esc));
+
+        app.on_key(key(KeyCode::F(3)));
+        app.on_key(key(KeyCode::Char('h')));
+        assert!(matches!(&app.mode, Mode::Viewer(v) if v.preview.kind == PreviewKind::Hex));
+    }
+
+    #[test]
+    fn shift_tab_and_uppercase_map_to_specs() {
+        let back = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(key_spec(back).unwrap().to_string(), "shift+tab");
+        let upper = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(key_spec(upper).unwrap().to_string(), "G");
+        let ctrl = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(key_spec(ctrl).unwrap().to_string(), "ctrl+a");
+    }
+
+    #[test]
+    fn h_is_hard_bound_and_ignores_the_keymap() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("left")).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        let mut config = bifold_core::config::Config::default();
+        config.keys.insert("?".into(), "none".into());
+        config.keys.insert("h".into(), "delete".into());
+        let mut session = Session::with_themes_dir(config, None);
+        let _ = session.panes[LEFT].navigate(&dir.path().join("left"));
+        let mut app = App::new(session);
+        assert!(
+            app.session.status().contains("reserved"),
+            "{}",
+            app.session.status()
+        );
+
+        app.on_key(key(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Normal), "help action was unbound");
+        app.on_key(key(KeyCode::Char('h')));
+        assert!(
+            matches!(app.mode, Mode::Help(0)),
+            "h still opens help, and never deletes"
+        );
+    }
+
+    #[test]
+    fn help_tabs_navigate_wrap_and_close() {
+        let (_dir, mut app) = fixture();
+        app.on_key(key(KeyCode::Char('h')));
+        let tab = |app: &App| match app.mode {
+            Mode::Help(t) => t,
+            _ => panic!("help closed unexpectedly"),
+        };
+        app.on_key(key(KeyCode::Right));
+        assert_eq!(tab(&app), 1);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(tab(&app), 2);
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Left));
+        assert_eq!(tab(&app), 4, "wraps to the last tab");
+        app.on_key(key(KeyCode::Home));
+        assert_eq!(tab(&app), 0);
+        app.on_key(key(KeyCode::Char('4')));
+        assert_eq!(tab(&app), 3);
+        app.on_key(key(KeyCode::Char('9')));
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(tab(&app), 3, "unrelated keys change nothing");
+        app.on_key(key(KeyCode::End));
+        assert_eq!(tab(&app), 4);
+
+        for close in [
+            KeyCode::Esc,
+            KeyCode::Char('h'),
+            KeyCode::Char('q'),
+            KeyCode::Char('?'),
+        ] {
+            app.on_key(key(KeyCode::Char('h')));
+            assert!(matches!(app.mode, Mode::Help(0)) || matches!(app.mode, Mode::Normal));
+            app.mode = Mode::Help(2);
+            app.on_key(key(close));
+            assert!(matches!(app.mode, Mode::Normal), "{close:?} closes help");
+        }
+    }
+
+    #[test]
+    fn typing_h_in_a_prompt_types_h() {
+        let (_dir, mut app) = fixture();
+        app.on_key(key(KeyCode::F(7)));
+        app.on_key(key(KeyCode::Char('h')));
+        match &app.mode {
+            Mode::Prompt(prompt) => assert_eq!(prompt.value, "h"),
+            other => panic!("expected the prompt to stay open, got {other:?}"),
+        }
     }
 }
