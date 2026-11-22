@@ -107,7 +107,9 @@ pub struct App {
     pub should_quit: bool,
     /// Rows visible per pane, published by the renderer.
     pub viewport: [usize; 2],
-    /// False when started with `--no-config`: leave the config file alone.
+    /// Whether quitting writes the config file. Off by default so tests and
+    /// embedders never touch the real one; `main` turns it on (unless
+    /// `--no-config`).
     pub persist: bool,
     /// A command the user confirmed in the run prompt. The event loop owns the
     /// terminal, so it takes this, suspends the UI and runs it.
@@ -123,7 +125,7 @@ impl App {
             mode: Mode::Normal,
             should_quit: false,
             viewport: [20, 20],
-            persist: true,
+            persist: false,
             pending_run: None,
             show_terminal: false,
         }
@@ -588,6 +590,13 @@ mod tests {
         fs::write(dir.path().join("left/a.txt"), b"hello").unwrap();
         let session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
         (dir, App::new(session))
+    }
+
+    #[test]
+    fn a_new_app_never_writes_the_config_file() {
+        // Tests and quit paths must not touch ~/.config/bifold; only `main` opts in.
+        let (_dir, app) = fixture();
+        assert!(!app.persist);
     }
 
     #[test]

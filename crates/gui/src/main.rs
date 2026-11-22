@@ -356,7 +356,8 @@ struct GuiApp {
     /// The toolbar filter box has keyboard focus: let it have the keys.
     typing: bool,
     reveal: [bool; 2],
-    /// False when started with `--no-config`.
+    /// Whether quitting writes the config file. Off by default so tests never
+    /// touch the real one; `run` turns it on (unless `--no-config`).
     persist: bool,
 }
 
@@ -376,7 +377,7 @@ impl GuiApp {
             help_tab: 0,
             typing: false,
             reveal: [false; 2],
-            persist: true,
+            persist: false,
         }
     }
 
@@ -1598,6 +1599,12 @@ mod tests {
             output = ctx.run(raw.clone(), |ctx| app.ui(ctx));
         }
         output
+    }
+
+    #[test]
+    fn a_new_app_never_writes_the_config_file() {
+        let (_dir, app) = fixture();
+        assert!(!app.persist);
     }
 
     #[test]
