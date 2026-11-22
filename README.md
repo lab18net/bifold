@@ -69,7 +69,7 @@ cargo build --release
 | `F5` | copy to other pane | `F6` | move to other pane |
 | `F7` | new folder | `F8` | delete |
 | `Ctrl+N` | new file | `Ctrl+A` / `Ctrl+D` | mark all / clear marks |
-| `Ctrl+O` | output of the last run command | | |
+| `Ctrl+O` | output of the last run command | `H` | show / hide the key-hint line |
 | `.` | hidden files | `s` / `o` | cycle sort key / flip order |
 | `/` | filter | `g` | go to path |
 | `r` | refresh | `b` / `f` | back / forward |
@@ -117,6 +117,7 @@ delete_mode = "trash"  # trash | permanent
 confirm_delete = true
 editor = ""
 show_permissions = false
+show_hints = true      # the key-hint line at the bottom of the terminal UI (H toggles)
 theme = "bifold"       # see Themes below
 run_executables = true # Enter on an executable shows a run line
 run_timeout_ms = 10000 # desktop: leave a still-running command after this long
@@ -147,7 +148,7 @@ backspace delete insert up down left right home end pageup pagedown f1`…`f24`
 Actions (`[keys]`): `quit switch_pane up down page_up page_down home end open
 parent back forward toggle_mark mark_all clear_marks view view_hex rename copy
 move mkdir new_file delete toggle_hidden cycle_sort toggle_sort_order filter
-goto refresh help cancel cycle_theme last_output`.
+goto refresh help cancel cycle_theme toggle_hints last_output`.
 Actions (`[viewer_keys]`): `close up down page_up page_down top bottom
 toggle_wrap toggle_hex`.
 
@@ -287,7 +288,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 184 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 188 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

@@ -69,6 +69,7 @@ actions! {
         Refresh => ("refresh", "Refresh"),
         Help => ("help", "Show help"),
         CycleTheme => ("cycle_theme", "Cycle color theme"),
+        ToggleHints => ("toggle_hints", "Show / hide the key-hint line"),
         LastOutput => ("last_output", "View output of the last run command"),
         Cancel => ("cancel", "Clear marks and filter"),
     }
@@ -312,6 +313,7 @@ impl Keymap {
             ("r", A::Refresh),
             ("?", A::Help),
             ("t", A::CycleTheme),
+            ("H", A::ToggleHints),
             ("esc", A::Cancel),
         ];
         let viewer = [

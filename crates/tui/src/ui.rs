@@ -97,7 +97,8 @@ const MARKER_COL: usize = 2;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(area);
+    let footer_rows = if app.session.config.show_hints { 2 } else { 1 };
+    let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(footer_rows)]).split(area);
     let panes =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
 
@@ -309,16 +310,17 @@ fn draw_footer(frame: &mut Frame, app: &App, pal: &Pal, area: Rect) {
         }
     };
 
-    let lines = vec![
-        Line::from(Span::styled(
+    let mut lines = Vec::new();
+    if app.session.config.show_hints {
+        lines.push(Line::from(Span::styled(
             ellipsis_right(&hints, width),
             Style::new().fg(pal.faint),
-        )),
-        Line::from(Span::styled(
-            ellipsis_right(&status, width),
-            Style::new().fg(color),
-        )),
-    ];
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        ellipsis_right(&status, width),
+        Style::new().fg(color),
+    )));
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -947,5 +949,56 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("x hex"), "{screen}");
+    }
+
+    #[test]
+    fn hints_can_be_hidden_and_the_panes_get_the_row_back() {
+        let (_dir, mut app) = fixture();
+        let shown = render(&mut app, 100, 12);
+        assert!(shown.contains("h help"), "{shown}");
+        let rows_before = shown.lines().count();
+
+        app.on_key(key(crossterm::event::KeyCode::Char('H')));
+        assert!(!app.session.config.show_hints);
+        let hidden = render(&mut app, 100, 12);
+        assert!(
+            !hidden.contains("h help") && !hidden.contains("tab switch"),
+            "{hidden}"
+        );
+        assert!(
+            hidden.contains("key hints hidden"),
+            "the status line stays: {hidden}"
+        );
+        assert_eq!(hidden.lines().count(), rows_before, "same screen size");
+        assert!(app.viewport[0] > 0);
+
+        // The pane is one row taller without the hint line.
+        let tall_with = {
+            let (_d, mut a) = fixture();
+            render(&mut a, 100, 12);
+            a.viewport[0]
+        };
+        assert_eq!(app.viewport[0], tall_with + 1);
+
+        app.on_key(key(crossterm::event::KeyCode::Char('H')));
+        assert!(render(&mut app, 100, 12).contains("h help"));
+    }
+
+    #[test]
+    fn show_hints_false_in_the_config_starts_without_the_hint_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("left")).unwrap();
+        fs::create_dir(dir.path().join("right")).unwrap();
+        let config = bifold_core::config::Config {
+            show_hints: false,
+            ..Default::default()
+        };
+        let mut session = Session::with_themes_dir(config, None);
+        let _ = session.panes[bifold_core::session::LEFT].navigate(&dir.path().join("left"));
+        let mut app = App::new(session);
+        for (w, h) in [(12, 4), (40, 8), (80, 24), (200, 60)] {
+            let screen = render(&mut app, w, h);
+            assert!(!screen.contains("h help"), "{w}x{h}: {screen}");
+        }
     }
 }

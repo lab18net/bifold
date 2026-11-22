@@ -130,7 +130,12 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
             1,
             "sort key / sort order",
         ),
-        key(map, &[A::CycleTheme], 1, "next colour theme"),
+        key(
+            map,
+            &[A::CycleTheme, A::ToggleHints],
+            1,
+            "next colour theme / show or hide the key-hint line",
+        ),
         heading("App"),
         HelpLine::Key("h".into(), "this help (fixed — cannot be rebound)".into()),
         key(map, &[A::Quit], 1, "quit"),

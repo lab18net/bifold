@@ -311,6 +311,18 @@ impl Session {
                 self.cycle_theme();
                 return true;
             }
+            Action::ToggleHints => {
+                self.config.show_hints = !self.config.show_hints;
+                self.message = Some(
+                    if self.config.show_hints {
+                        "key hints shown"
+                    } else {
+                        "key hints hidden (H shows them again; h opens the help)"
+                    }
+                    .into(),
+                );
+                return true;
+            }
             Action::Refresh => {
                 self.reload_all();
                 self.message = Some("refreshed".into());
@@ -830,5 +842,21 @@ mod tests {
             preview.title(),
             "$ echo hi; exit 2  [output]  (ran: echo hi; exit 2 — exit 2)"
         );
+    }
+
+    #[test]
+    fn toggle_hints_flips_the_setting_and_says_how_to_undo_it() {
+        let dir = fixture();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        assert!(session.config.show_hints, "on by default");
+        assert!(session.apply(Action::ToggleHints, 10));
+        assert!(!session.config.show_hints);
+        assert!(
+            session.status().contains("hidden") && session.status().contains('H'),
+            "{}",
+            session.status()
+        );
+        assert!(session.apply(Action::ToggleHints, 10));
+        assert!(session.config.show_hints);
     }
 }

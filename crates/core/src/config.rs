@@ -35,6 +35,8 @@ pub struct Config {
     /// Opened by the "edit" action; empty means `$EDITOR` or `vi`.
     pub editor: String,
     pub show_permissions: bool,
+    /// The key-hint line at the bottom of the terminal front end.
+    pub show_hints: bool,
     /// lf-style previewer: `program [args…]` is run as
     /// `program [args…] <file> <width> <height> <x> <y>`; its stdout (ANSI
     /// colours allowed) becomes the viewer content. Empty = built-in viewer.
@@ -73,6 +75,7 @@ impl Default for Config {
             confirm_delete: true,
             editor: String::new(),
             show_permissions: false,
+            show_hints: true,
             previewer: String::new(),
             previewer_timeout_ms: 3000,
             run_executables: true,

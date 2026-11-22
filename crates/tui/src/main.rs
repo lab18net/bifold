@@ -48,6 +48,7 @@ KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.t
     . hidden files           s sort key     o sort order
     / filter                 g go to path   r refresh     h / ? help (h is fixed)   q quit
     t cycle colour theme     Ctrl+O output of the last run command
+    H show / hide the key-hint line (or show_hints = false in the config)
     In the viewer: x toggles hex, w wraps, Esc closes.
 ";
 

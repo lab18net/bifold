@@ -2077,4 +2077,16 @@ mod tests {
         let viewer = app.viewer.as_ref().expect("Ctrl+O brings it back");
         assert_eq!(viewer.preview.plain_lines(), ["from-script again", "oops"]);
     }
+
+    #[test]
+    fn h_capital_toggles_the_hint_setting_without_breaking_the_desktop_ui() {
+        let (_dir, mut app) = fixture();
+        let ctx = egui::Context::default();
+        press(&ctx, &mut app, egui::Key::H, egui::Modifiers::SHIFT);
+        assert!(!app.session.config.show_hints);
+        assert!(
+            !run_frames(&mut app, 2).shapes.is_empty(),
+            "the desktop has no hint line to hide"
+        );
+    }
 }
