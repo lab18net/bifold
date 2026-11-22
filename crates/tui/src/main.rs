@@ -130,10 +130,10 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     };
 
-    let mut config = if args.no_config {
-        Config::default()
+    let (mut config, config_problem) = if args.no_config {
+        (Config::default(), None)
     } else {
-        Config::load()
+        Config::load_checked()
     };
     if let Some(path) = &args.path {
         let text = path.display().to_string();
@@ -159,7 +159,8 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let session = Session::new(config);
+    let mut session = Session::new(config);
+    session.report_config_problem(config_problem);
     if args.dump {
         dump(&session);
         return Ok(ExitCode::SUCCESS);

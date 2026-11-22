@@ -75,6 +75,12 @@ cargo run -p bifold-gui -- --path ~/src
    in `Session::last_run` (viewed with `Ctrl+O`). Output is capped, a slow
    command is detached rather than killed, and `Session::run_suggestion`
    decides when Enter offers a run line.
+13. **The config file belongs to the user.** `Config::save_to` (a full
+   rewrite) is only for creating a missing file. Everything else goes through
+   `Config::save_view_changes_to`, which edits in place with `toml_edit` and
+   writes only settings in `ViewSettings` that changed since the session
+   started. A new setting the app itself changes at runtime must be added to
+   `ViewSettings`; a file that does not parse must never be overwritten.
 
 ## Adding a feature
 

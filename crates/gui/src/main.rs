@@ -125,10 +125,10 @@ fn main() -> eframe::Result {
         }
     };
 
-    let mut config = if args.no_config {
-        Config::default()
+    let (mut config, config_problem) = if args.no_config {
+        (Config::default(), None)
     } else {
-        Config::load()
+        Config::load_checked()
     };
     if let Some(path) = &args.path {
         let text = path.display().to_string();
@@ -146,7 +146,8 @@ fn main() -> eframe::Result {
     }
 
     let no_config = args.no_config;
-    let session = Session::new(config);
+    let mut session = Session::new(config);
+    session.report_config_problem(config_problem);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 780.0])

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
+use crate::config::{Config, ViewSettings};
 use crate::error::{Error, Result};
 use crate::fsops::{self, DeleteMode, OpStats};
 use crate::job::{JobResult, JobRunner, Progress};
@@ -43,6 +43,9 @@ pub struct Session {
     pub message: Option<String>,
     /// The last command run from the file list, with its output (`Ctrl+O`).
     pub last_run: Option<crate::runcmd::RunOutcome>,
+    /// The settings as they were when the session started; `save_config` writes
+    /// only what differs from this.
+    saved_view: ViewSettings,
 }
 
 impl Session {
@@ -68,8 +71,10 @@ impl Session {
             themes_dir,
             message: (!warnings.is_empty()).then(|| format!("config: {}", warnings.join("; "))),
             last_run: None,
+            saved_view: ViewSettings::default(),
         };
         session.apply_preferences();
+        session.saved_view = session.view_settings();
         session
     }
 
@@ -110,6 +115,17 @@ impl Session {
             themes: self.theme_names(),
         };
         crate::help::pages(&self.keymap, &ctx)
+    }
+
+    /// The run line to offer for the entry under the cursor: `./name` when it
+    /// is an executable file and `run_executables` is on.
+    /// Show why the config file was ignored at startup (see `Config::load_checked`).
+    pub fn report_config_problem(&mut self, problem: Option<String>) {
+        if let Some(problem) = problem {
+            self.message = Some(format!(
+                "config: {problem} — using defaults; the file is left untouched and will not be saved over"
+            ));
+        }
     }
 
     /// The last run command as viewer content, or `None` before any run.
@@ -156,22 +172,42 @@ impl Session {
     /// Copy the live view state (sort, hidden files, theme, directories) into
     /// the config and write it. Both front ends call this on exit.
     pub fn save_config(&mut self) -> Result<PathBuf> {
-        let (show_hidden, sort, sort_desc) = {
-            let pane = self.pane();
-            (
-                pane.show_hidden,
-                pane.sort_key.label().to_string(),
-                pane.sort_dir == SortDir::Desc,
-            )
-        };
-        self.config.show_hidden = show_hidden;
-        self.config.sort = sort;
-        self.config.sort_desc = sort_desc;
-        self.config.theme = self.theme.name.clone();
-        let left = self.panes[LEFT].path.clone();
-        let right = self.panes[RIGHT].path.clone();
-        self.config.remember_dirs(&left, &right);
-        self.config.save()
+        let path =
+            Config::path().ok_or_else(|| Error::invalid("cannot locate a config directory"))?;
+        self.save_config_to(&path)
+    }
+
+    /// [`Session::save_config`] with an explicit file (tests use a temp dir).
+    pub fn save_config_to(&mut self, path: &Path) -> Result<PathBuf> {
+        let now = self.view_settings();
+        self.config.show_hidden = now.show_hidden;
+        self.config.sort = now.sort.clone();
+        self.config.sort_desc = now.sort_desc;
+        self.config.theme = now.theme.clone();
+        self.config.show_hints = now.show_hints;
+        self.config.left = now.left.clone();
+        self.config.right = now.right.clone();
+        // Edits the file in place; only settings changed in this session are written
+        // (so e.g. `--theme nord` for one run does not become permanent).
+        let saved = self
+            .config
+            .save_view_changes_to(path, &self.saved_view, &now)?;
+        self.saved_view = now;
+        Ok(saved)
+    }
+
+    /// The settings the app changes while running, as they are right now.
+    fn view_settings(&self) -> ViewSettings {
+        let pane = self.pane();
+        ViewSettings {
+            left: self.panes[LEFT].path.display().to_string(),
+            right: self.panes[RIGHT].path.display().to_string(),
+            show_hidden: pane.show_hidden,
+            sort: pane.sort_key.label().to_string(),
+            sort_desc: pane.sort_dir == SortDir::Desc,
+            theme: self.theme.name.clone(),
+            show_hints: self.config.show_hints,
+        }
     }
 
     /// Push config-level preferences into both panes.
@@ -858,5 +894,79 @@ mod tests {
         );
         assert!(session.apply(Action::ToggleHints, 10));
         assert!(session.config.show_hints);
+    }
+
+    #[test]
+    fn saving_changes_only_what_this_session_changed() {
+        let dir = fixture();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "# keep me\ntheme = \"gruvbox\"   # my favourite\nsort = \"name\"\nodd = true\n",
+        )
+        .unwrap();
+
+        // `--theme nord` for this run only: the override must not be written back.
+        let mut config = Config::load_from(&path).unwrap();
+        config.theme = "nord".into();
+        config.left = dir.path().join("left").display().to_string();
+        config.right = dir.path().join("right").display().to_string();
+        let mut session = Session::with_themes_dir(config, None);
+        session.pane_mut().cycle_sort();
+        session.save_config_to(&path).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("# keep me") && text.contains("odd = true"),
+            "{text}"
+        );
+        assert!(
+            text.contains("theme = \"gruvbox\"   # my favourite"),
+            "override not persisted: {text}"
+        );
+        assert!(
+            text.contains("sort = \"size\""),
+            "a change made in the session is saved: {text}"
+        );
+        assert!(
+            !text.contains("left =") && !text.contains("right ="),
+            "folders did not change, so they are not written: {text}"
+        );
+
+        // Navigating changes them: now the left folder is written.
+        fs::create_dir(dir.path().join("left/sub")).unwrap();
+        session.panes[LEFT]
+            .navigate(&dir.path().join("left/sub"))
+            .unwrap();
+        session.save_config_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("left = ") && text.contains("sub"), "{text}");
+        assert!(!text.contains("right ="), "{text}");
+
+        // Now change the theme in the session: that one is written.
+        assert!(session.set_theme("solarized"));
+        session.save_config_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("theme = \"solarized\"   # my favourite"),
+            "{text}"
+        );
+        // A second save with nothing new rewrites nothing.
+        session.save_config_to(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn a_config_problem_is_shown_at_startup() {
+        let dir = fixture();
+        let mut session = Session::new_at(&dir.path().join("left"), &dir.path().join("right"));
+        session.report_config_problem(None);
+        assert!(session.message.is_none());
+        session.report_config_problem(Some("config.toml: bad".into()));
+        let status = session.status();
+        assert!(
+            status.contains("config.toml: bad") && status.contains("left untouched"),
+            "{status}"
+        );
     }
 }

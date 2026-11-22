@@ -1,6 +1,11 @@
 //! Persistent preferences: `~/.config/bifold/config.toml`.
 //!
 //! Every field has a default, so a missing or partial file is fine.
+//!
+//! The file belongs to the user. The app only ever *edits it in place*: when it
+//! exits it changes the few settings that changed during the session (sort,
+//! theme, folders…) and leaves comments, unknown keys, order and formatting
+//! alone. A file it cannot parse is never overwritten.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,6 +18,19 @@ use crate::fsops::{self, DeleteMode};
 use crate::keys::Keymap;
 use crate::sort::{SortDir, SortKey};
 use crate::theme;
+
+/// The settings the app itself changes while running (everything else in the
+/// config file is only ever read). Compared before/after to decide what to write.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewSettings {
+    pub left: String,
+    pub right: String,
+    pub show_hidden: bool,
+    pub sort: String,
+    pub sort_desc: bool,
+    pub theme: String,
+    pub show_hints: bool,
+}
 
 pub const APP_DIR: &str = "bifold";
 pub const FILE_NAME: &str = "config.toml";
@@ -109,9 +127,22 @@ impl Config {
 
     /// Load the user config, falling back to defaults on any problem.
     pub fn load() -> Self {
-        match Self::path() {
-            Some(path) => Self::load_from(&path).unwrap_or_default(),
-            None => Self::default(),
+        Self::load_checked().0
+    }
+
+    /// Like `load`, but says why the file was ignored. A missing file is fine
+    /// (defaults, no problem); an unreadable or invalid one yields defaults
+    /// *and* the reason, and the file itself is never modified.
+    pub fn load_checked() -> (Self, Option<String>) {
+        let Some(path) = Self::path() else {
+            return (Self::default(), None);
+        };
+        if !path.exists() {
+            return (Self::default(), None);
+        }
+        match Self::load_from(&path) {
+            Ok(config) => (config, None),
+            Err(err) => (Self::default(), Some(err.to_string())),
         }
     }
 
@@ -134,6 +165,84 @@ impl Config {
             .map_err(|e| Error::invalid(format!("cannot serialize config: {e}")))?;
         fs::write(path, text).map_err(|e| Error::io(path, e))?;
         Ok(path.to_path_buf())
+    }
+
+    /// Write what changed during the session into the existing file, in place.
+    /// See [`Config::save_view_changes_to`].
+    pub fn save_view_changes(&self, before: &ViewSettings, now: &ViewSettings) -> Result<PathBuf> {
+        let path =
+            Self::path().ok_or_else(|| Error::invalid("cannot locate a config directory"))?;
+        self.save_view_changes_to(&path, before, now)
+    }
+
+    /// Without a file yet, write a complete one. Otherwise edit the existing
+    /// file: only the fields where `now` differs from `before` are set, so the
+    /// user's comments, unknown keys, ordering and formatting survive, and edits
+    /// made to the file while the app ran are kept (unless the app changed that
+    /// same setting). A file that does not parse is left untouched and an error
+    /// is returned. Symlinked config files are written through the link.
+    pub fn save_view_changes_to(
+        &self,
+        path: &Path,
+        before: &ViewSettings,
+        now: &ViewSettings,
+    ) -> Result<PathBuf> {
+        use toml_edit::{DocumentMut, Item, Value};
+
+        if !path.exists() {
+            return self.save_to(path);
+        }
+        // Write through a symlink (dotfile repos) instead of replacing it.
+        let target = fs::canonicalize(path).map_err(|e| Error::io(path, e))?;
+        let text = fs::read_to_string(&target).map_err(|e| Error::io(&target, e))?;
+        let mut doc: DocumentMut = text.parse().map_err(|e| {
+            Error::invalid(format!(
+                "{}: {e} — not saving settings, the file is left as it is",
+                target.display()
+            ))
+        })?;
+
+        let mut set = |key: &str, value: Value| {
+            let mut value = value;
+            // Keep the user's inline comment and spacing on a value we replace.
+            if let Some(old) = doc.get(key).and_then(Item::as_value) {
+                *value.decor_mut() = old.decor().clone();
+            }
+            doc[key] = Item::Value(value);
+        };
+        if now.left != before.left {
+            set("left", now.left.as_str().into());
+        }
+        if now.right != before.right {
+            set("right", now.right.as_str().into());
+        }
+        if now.show_hidden != before.show_hidden {
+            set("show_hidden", now.show_hidden.into());
+        }
+        if now.sort != before.sort {
+            set("sort", now.sort.as_str().into());
+        }
+        if now.sort_desc != before.sort_desc {
+            set("sort_desc", now.sort_desc.into());
+        }
+        if now.theme != before.theme {
+            set("theme", now.theme.as_str().into());
+        }
+        if now.show_hints != before.show_hints {
+            set("show_hints", now.show_hints.into());
+        }
+
+        let updated = doc.to_string();
+        if updated != text {
+            // Temp file + rename: a crash never leaves a half-written config.
+            let tmp = target.with_extension("toml.tmp");
+            fs::write(&tmp, &updated).map_err(|e| Error::io(&tmp, e))?;
+            if let Ok(meta) = fs::metadata(&target) {
+                let _ = fs::set_permissions(&tmp, meta.permissions());
+            }
+            fs::rename(&tmp, &target).map_err(|e| Error::io(&target, e))?;
+        }
+        Ok(target)
     }
 
     /// Default bindings with this config's overrides applied, plus any problems found.
@@ -284,5 +393,213 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.sort_key(), SortKey::Name);
+    }
+
+    fn view(config: &Config) -> ViewSettings {
+        ViewSettings {
+            left: config.left.clone(),
+            right: config.right.clone(),
+            show_hidden: config.show_hidden,
+            sort: config.sort.clone(),
+            sort_desc: config.sort_desc,
+            theme: config.theme.clone(),
+            show_hints: config.show_hints,
+        }
+    }
+
+    const HAND_WRITTEN: &str = r##"# My Bifold config — do not lose this comment
+left = "/old/left"    # work tree
+right = "/old/right"
+show_hidden = false   # flip with '.'
+sort = "name"
+mystery_setting = 42  # unknown to this version
+
+previewer = "~/bin/preview.sh"
+
+# my bindings
+[keys]
+"ctrl+n" = "mkdir"   # muscle memory
+"f8" = "none"
+
+[theme_custom]
+accent = "#ff8800"
+"##;
+
+    #[test]
+    fn saving_edits_in_place_and_keeps_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let before = view(&Config::load_from(&path).unwrap());
+        let mut now = before.clone();
+        now.left = "/new/left".into();
+        now.show_hidden = true;
+        now.theme = "nord".into(); // not in the file at all yet
+
+        let config = Config::load_from(&path).unwrap();
+        config.save_view_changes_to(&path, &before, &now).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        for kept in [
+            "# My Bifold config — do not lose this comment",
+            "mystery_setting = 42  # unknown to this version",
+            "previewer = \"~/bin/preview.sh\"",
+            "# my bindings",
+            "\"ctrl+n\" = \"mkdir\"   # muscle memory",
+            "[theme_custom]",
+            "accent = \"#ff8800\"",
+        ] {
+            assert!(text.contains(kept), "lost {kept:?}:\n{text}");
+        }
+        assert!(
+            text.contains("left = \"/new/left\"") && text.contains("# work tree"),
+            "{text}"
+        );
+        assert!(
+            text.contains("show_hidden = true") && text.contains("# flip with '.'"),
+            "{text}"
+        );
+        assert!(
+            text.contains("right = \"/old/right\"") && text.contains("sort = \"name\""),
+            "untouched values stay: {text}"
+        );
+
+        let again = Config::load_from(&path).unwrap();
+        assert_eq!(again.left, "/new/left");
+        assert!(again.show_hidden);
+        assert_eq!(again.theme, "nord");
+        assert_eq!(again.previewer, "~/bin/preview.sh");
+        assert_eq!(again.keys.get("ctrl+n").map(String::as_str), Some("mkdir"));
+        assert_eq!(again.keys.get("f8").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn nothing_changed_means_the_file_is_not_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        let same = view(&config);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        config.save_view_changes_to(&path, &same, &same).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            HAND_WRITTEN,
+            "byte for byte"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            modified,
+            "not even rewritten"
+        );
+        assert!(!dir.path().join("config.toml.tmp").exists());
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let broken = "show_hidden = = true\n[keys\n";
+        fs::write(&path, broken).unwrap();
+        let config = Config::default();
+        let before = view(&config);
+        let mut now = before.clone();
+        now.show_hidden = true;
+        let err = config
+            .save_view_changes_to(&path, &before, &now)
+            .unwrap_err();
+        assert!(err.to_string().contains("left as it is"), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    }
+
+    #[test]
+    fn edits_made_while_the_app_ran_survive_unless_the_app_changed_that_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "sort = \"name\"\ntheme = \"nord\"\nprevewer_note = 1\n",
+        )
+        .unwrap();
+        let started = view(&Config::load_from(&path).unwrap());
+
+        // The user edits the file in another window while Bifold is open.
+        fs::write(
+            &path,
+            "sort = \"time\"\ntheme = \"gruvbox\"\nprevewer_note = 1\nconfirm_delete = false\n",
+        )
+        .unwrap();
+
+        // Bifold only changed the theme.
+        let mut now = started.clone();
+        now.theme = "solarized".into();
+        Config::default()
+            .save_view_changes_to(&path, &started, &now)
+            .unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("sort = \"time\""),
+            "outside edit kept: {text}"
+        );
+        assert!(
+            text.contains("confirm_delete = false"),
+            "outside edit kept: {text}"
+        );
+        assert!(
+            text.contains("theme = \"solarized\""),
+            "the app's own change wins: {text}"
+        );
+    }
+
+    #[test]
+    fn a_missing_file_gets_a_complete_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub/config.toml");
+        let config = Config {
+            sort: "size".into(),
+            ..Default::default()
+        };
+        let same = view(&config);
+        config.save_view_changes_to(&path, &same, &same).unwrap();
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.sort, "size");
+        assert!(fs::read_to_string(&path).unwrap().contains("show_hints"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_is_written_through_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("dotfiles-config.toml");
+        let link = dir.path().join("config.toml");
+        fs::write(&real, "# mine\nsort = \"name\"\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let config = Config::load_from(&link).unwrap();
+        let before = view(&config);
+        let mut now = before.clone();
+        now.sort = "size".into();
+        config.save_view_changes_to(&link, &before, &now).unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "still a link"
+        );
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "# mine\nsort = \"size\"\n"
+        );
+    }
+
+    #[test]
+    fn load_checked_explains_a_bad_file_and_accepts_a_missing_one() {
+        // Exercised through load_from + the same rule load_checked applies.
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("config.toml");
+        fs::write(&bad, "show_hidden = \"yes\"\n").unwrap();
+        let err = Config::load_from(&bad).unwrap_err().to_string();
+        assert!(err.contains("config.toml"), "{err}");
     }
 }

@@ -125,6 +125,17 @@ run_timeout_ms = 10000 # desktop: leave a still-running command after this long
 
 `--no-config` starts from defaults and writes nothing.
 
+**The file is yours.** Bifold edits it in place on exit and writes only the
+settings you changed during the session (sort, hidden files, theme, key-hint
+line, and the pane folders when you moved). Comments, unknown keys, ordering,
+`[keys]`/`[theme_custom]` tables and inline comments stay as you wrote them;
+edits you make to the file while Bifold is running are kept too, unless Bifold
+changed that same setting. A one-run `--theme` / `--path` is not written back.
+A file that does not parse is **never overwritten**: Bifold starts with
+defaults, says so in the status line, and leaves the file alone. A symlinked
+config (dotfiles repo) is written through the link. With no file yet, a full
+default one is created.
+
 ### Key bindings
 
 Overrides go in two tables; everything not mentioned keeps its default.
@@ -288,7 +299,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 188 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 197 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```
