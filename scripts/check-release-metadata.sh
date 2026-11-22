@@ -55,6 +55,10 @@ case "$origin" in
 esac
 check "formula templates use the same repository" \
     sh -c "grep -q 'github.com/$slug' packaging/homebrew/bifold.rb.in && grep -q 'github.com/$slug' packaging/homebrew/bifold-gui.rb.in"
+site_url="https://${slug%%/*}.github.io/${slug##*/}/"
+for f in packaging/homebrew/bifold.rb.in packaging/homebrew/bifold-gui.rb.in packaging/homebrew/cask/bifold-app.rb.in; do
+    check "$f homepage is the project site $site_url" grep -qF "homepage \"$site_url\"" "$f"
+done
 
 # --- changelog -------------------------------------------------------------
 if [ -n "$release" ]; then
@@ -109,13 +113,23 @@ check "bifold-gui.rb.in builds crates/gui and installs its man page" \
     sh -c "grep -q 'path: \"crates/gui\"' packaging/homebrew/bifold-gui.rb.in && grep -q 'man/bifold-gui.1' packaging/homebrew/bifold-gui.rb.in && test -f crates/gui/Cargo.toml"
 
 check "cask template has @VERSION@/@URL@/@SHA256@ and installs Bifold.app" \
-    sh -c "f=packaging/homebrew/cask/bifold-app.rb.in; grep -q @VERSION@ \$f && grep -q @URL@ \$f && grep -q @SHA256@ \$f && grep -q 'app \"Bifold.app\"' \$f && grep -q 'github.com/$slug' \$f"
+    sh -c "f=packaging/homebrew/cask/bifold-app.rb.in; grep -q @VERSION@ \$f && grep -q @URL@ \$f && grep -q @SHA256@ \$f && grep -q 'app \"Bifold.app\"' \$f"
 
 # --- macOS app bundle --------------------------------------------------------
 check "packaging/macos/Bifold.icns exists" test -s packaging/macos/Bifold.icns
 check "Info.plist template names the bifold-gui executable and the icon" \
     sh -c "grep -q '<string>bifold-gui</string>' packaging/macos/Info.plist.in && grep -q '<string>Bifold</string>' packaging/macos/Info.plist.in && grep -q '@VERSION@' packaging/macos/Info.plist.in"
 check "scripts/package-macos.sh is executable" test -x scripts/package-macos.sh
+
+# --- project site (GitHub Pages) -----------------------------------------------
+for f in site/index.html site/screens.js site/favicon.png site/icon.png; do
+    check "$f exists" test -s "$f"
+done
+for cmd in "brew install ${slug%%/*}/tap/bifold" "brew install --cask ${slug%%/*}/tap/bifold-app" "brew install ${slug%%/*}/tap/bifold-gui"; do
+    check "site shows '$cmd'" grep -qF "$cmd" site/index.html
+done
+check "site links to the tap" grep -q "github.com/${slug%%/*}/homebrew-tap" site/index.html
+check "pages workflow publishes site/" grep -q 'path: site' .github/workflows/pages.yml
 
 # --- lockfile --------------------------------------------------------------
 check "Cargo.lock is up to date (--locked)" cargo metadata --locked --format-version 1

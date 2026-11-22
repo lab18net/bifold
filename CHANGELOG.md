@@ -18,6 +18,9 @@ First public release.
 
 ### Added
 
+- Project site at <https://lab18net.github.io/bifold/> (`site/`, deployed with GitHub
+  Pages); the formulae and the cask now use it as their homepage. Its terminal
+  screenshots are captured from the real TUI by `scripts/site-screens.py`.
 - Homebrew cask `bifold-app` that installs the prebuilt `Bifold.app` from the
   GitHub release (`brew install --cask lab18net/tap/bifold-app`).
 - `Bifold.app` for macOS: `scripts/package-macos.sh` (or `make app`) bundles the

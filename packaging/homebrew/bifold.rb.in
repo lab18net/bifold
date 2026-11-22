@@ -1,6 +1,6 @@
 class Bifold < Formula
   desc "Two-pane file manager for the terminal"
-  homepage "https://github.com/lab18net/bifold"
+  homepage "https://lab18net.github.io/bifold/"
   url "@URL@"
   sha256 "@SHA256@"
   license "MIT"

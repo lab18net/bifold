@@ -5,7 +5,7 @@ cask "bifold-app" do
   url "@URL@"
   name "Bifold"
   desc "Two-pane file manager, desktop app"
-  homepage "https://github.com/lab18net/bifold"
+  homepage "https://lab18net.github.io/bifold/"
 
   livecheck do
     url :url

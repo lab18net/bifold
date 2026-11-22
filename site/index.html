@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bifold — two panes, one keyboard</title>
+<meta name="description" content="Bifold is a dual-pane file manager for macOS: a full-screen terminal UI and a native desktop window on one shared core. Install with Homebrew.">
+<link rel="canonical" href="https://lab18net.github.io/bifold/">
+<link rel="icon" type="image/png" href="favicon.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Bifold — two panes, one keyboard">
+<meta property="og:description" content="Dual-pane file manager: terminal UI and desktop window on one core. brew install lab18net/tap/bifold">
+<meta property="og:url" content="https://lab18net.github.io/bifold/">
+<meta property="og:image" content="https://lab18net.github.io/bifold/icon.png">
+<meta name="twitter:card" content="summary">
+<style>
+:root{
+  --bg:#12100e; --panel:#1a1714; --line:#2c2722; --ink:#ece6dc; --muted:#a39a8c; --faint:#6f675b;
+  --accent:#e0a458; --accent-ink:#1a1206; --ok:#8fbf7f;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --term-bg:#2e3440; --term-fg:#d8dee9;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}
+a:hover{color:#f3c07e}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+code,kbd,pre{font-family:var(--mono)}
+code{font-size:.9em;background:var(--panel);border:1px solid var(--line);padding:.08em .4em;border-radius:5px}
+
+header{display:flex;align-items:center;gap:14px;padding:22px 0}
+header img{width:34px;height:34px;border-radius:8px}
+header .name{font:600 20px var(--serif);letter-spacing:.01em;color:var(--ink);text-decoration:none}
+header nav{margin-left:auto;display:flex;gap:22px;font-size:15px}
+header nav a{color:var(--muted);text-decoration:none}
+header nav a:hover{color:var(--ink)}
+
+.hero{padding:44px 0 28px}
+h1{font:600 clamp(40px,7vw,76px)/1.02 var(--serif);letter-spacing:-.015em;margin:0 0 20px;max-width:14ch}
+h1 em{font-style:italic;color:var(--accent)}
+.lede{font-size:clamp(18px,2.2vw,21px);color:var(--muted);max-width:56ch;margin:0 0 30px}
+.lede b{color:var(--ink);font-weight:600}
+
+.cmd{display:flex;align-items:stretch;gap:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;max-width:560px;overflow:hidden}
+.cmd code{flex:1;border:0;background:none;padding:14px 16px;font-size:15.5px;white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+.cmd code::before{content:"$ ";color:var(--faint)}
+.cmd button{border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:600 13px var(--sans);padding:0 16px;cursor:pointer;min-width:78px}
+.cmd button:hover{color:var(--ink);background:#221e1a}
+.cmd button.done{color:var(--ok)}
+.cta-row code{white-space:normal;word-break:break-word}
+.cta-row{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center;margin-top:18px;font-size:15px;color:var(--muted)}
+
+.stage{margin:38px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;align-items:center}
+.chips span.lab{color:var(--faint);font-size:13px;margin-right:4px}
+.chips button{font:500 13px var(--sans);color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:999px;padding:5px 13px;cursor:pointer}
+.chips button:hover{color:var(--ink);border-color:var(--faint)}
+.chips button[aria-pressed="true"]{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.term{background:var(--term-bg);color:var(--term-fg);border-radius:12px;border:1px solid var(--line);box-shadow:0 18px 50px -20px #000;overflow:hidden;transition:background .25s,color .25s}
+.term .bar{display:flex;gap:7px;padding:11px 14px;background:rgba(0,0,0,.18)}
+.term .bar i{width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.18)}
+.term pre{margin:0 auto;width:fit-content;max-width:100%;padding:14px 16px 16px;overflow-x:auto;font-size:clamp(9.5px,1.62vw,15.5px);line-height:1.28;white-space:pre}
+.caption{color:var(--faint);font-size:14px;margin:12px 2px 0}
+
+section{padding:64px 0 8px}
+h2{font:600 clamp(28px,4vw,38px)/1.15 var(--serif);margin:0 0 8px;letter-spacing:-.005em}
+.sub{color:var(--muted);margin:0 0 28px;max-width:60ch}
+
+.install{border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:6px 28px;padding:22px 0;border-bottom:1px solid var(--line)}
+.row h3{margin:0;font:600 17px var(--sans)}
+.row h3 small{display:block;font-weight:400;color:var(--faint);font-size:13.5px;margin-top:2px}
+.row p{margin:10px 0 0;color:var(--muted);font-size:15.5px;max-width:62ch}
+.row .cmd{max-width:640px}
+.row>div{min-width:0}
+@media(max-width:720px){.row{grid-template-columns:minmax(0,1fr)}}
+
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px 56px}
+@media(max-width:820px){.two{grid-template-columns:minmax(0,1fr)}}
+.two h3{font:600 17px var(--sans);margin:22px 0 4px}
+.two p{margin:0;color:var(--muted);font-size:16px}
+
+table.keys{border-collapse:collapse;width:100%;font-size:15px}
+.keys td{padding:7px 12px 7px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.keys td:first-child{white-space:nowrap;width:1%;padding-right:22px}
+.keys td:nth-child(3){white-space:nowrap;width:1%;padding-right:22px}
+.keys td:nth-child(2),.keys td:nth-child(4){color:var(--muted)}
+kbd{font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--ink)}
+@media(max-width:720px){.keys td:nth-child(n+3){display:none}}
+
+footer{margin-top:84px;border-top:1px solid var(--line);padding:30px 0 56px;color:var(--faint);font-size:14.5px;display:flex;flex-wrap:wrap;gap:10px 28px}
+footer a{color:var(--muted)}
+footer .grow{flex:1}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.term{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="icon-256.png" alt="" width="34" height="34">
+    <a class="name" href="#top">Bifold</a>
+    <nav aria-label="Sections">
+      <a href="#install">Install</a>
+      <a href="#how">How it works</a>
+      <a href="#keys">Keys</a>
+      <a href="https://github.com/lab18net/bifold">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <div class="hero">
+      <h1>Two panes. <em>One keyboard.</em></h1>
+      <p class="lede">A dual-pane file manager in the classic commander tradition. The left pane is where you are, the right pane is where you are going. <b>Run it in the terminal or as a native window</b>: both are the same program on one shared core.</p>
+
+      <div class="cmd"><code id="main-cmd">brew install lab18net/tap/bifold</code><button type="button" data-copy="#main-cmd">Copy</button></div>
+      <div class="cta-row">
+        <span>Desktop app: <code>brew install --cask lab18net/tap/bifold-app</code></span>
+        <a href="https://github.com/lab18net/homebrew-tap">Homebrew tap</a>
+        <a href="https://github.com/lab18net/bifold/releases">Releases</a>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="chips" role="group" aria-label="Colour theme">
+        <span class="lab">theme</span>
+      </div>
+      <div class="term" id="term" role="img" aria-label="Bifold terminal UI showing two directory panes">
+        <div class="bar" aria-hidden="true"><i></i><i></i><i></i></div>
+        <pre id="screen">Loading…</pre>
+      </div>
+      <p class="caption">This is the real terminal UI, captured from the program itself, not a mock-up. The chips switch its built-in themes; <kbd>t</kbd> does the same in the app.</p>
+      <noscript><pre>Two panes, one keyboard. Install: brew install lab18net/tap/bifold</pre></noscript>
+    </div>
+
+    <section id="install" class="install" style="padding-top:72px;border-top:0">
+      <h2>Install</h2>
+      <p class="sub">Everything below is published from the same repository. Homebrew formulae and the cask live in the <a href="https://github.com/lab18net/homebrew-tap">lab18net/tap</a> tap.</p>
+      <div class="install">
+        <div class="row">
+          <h3>Terminal<small>formula <code>bifold</code></small></h3>
+          <div>
+            <div class="cmd"><code id="c1">brew install lab18net/tap/bifold</code><button type="button" data-copy="#c1">Copy</button></div>
+            <p>Builds from the tagged source with Homebrew's Rust and installs the <code>bifold</code> command and its man page. Takes about a minute.</p>
+          </div>
+        </div>
+        <div class="row">
+          <h3>macOS app<small>cask <code>bifold-app</code></small></h3>
+          <div>
+            <div class="cmd"><code id="c2">brew install --cask lab18net/tap/bifold-app</code><button type="button" data-copy="#c2">Copy</button></div>
+            <p>The prebuilt <code>Bifold.app</code> for Apple silicon, installed to /Applications. It is signed ad hoc and not notarised yet, so the cask clears the quarantine flag for you.</p>
+          </div>
+        </div>
+        <div class="row">
+          <h3>Desktop, from source<small>formula <code>bifold-gui</code></small></h3>
+          <div>
+            <div class="cmd"><code id="c3">brew install lab18net/tap/bifold-gui</code><button type="button" data-copy="#c3">Copy</button></div>
+            <p>The same window as a <code>bifold-gui</code> command, compiled on your machine.</p>
+          </div>
+        </div>
+        <div class="row">
+          <h3>With Cargo<small>Rust 1.88+</small></h3>
+          <div>
+            <div class="cmd"><code id="c4">cargo install --git https://github.com/lab18net/bifold --locked bifold-tui</code><button type="button" data-copy="#c4">Copy</button></div>
+            <p>Add <code>bifold-gui</code> for the desktop window. Release builds are also attached to each <a href="https://github.com/lab18net/bifold/releases">GitHub release</a> with checksums.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <h2>Built to stay out of your way</h2>
+      <p class="sub">The behaviour that matters is in the core, so the terminal UI and the desktop window act the same.</p>
+      <div class="two">
+        <div>
+          <h3>Copy and move run in the background</h3>
+          <p>Transfers show progress and can be cancelled. Only one runs at a time, and links are recreated, never followed.</p>
+          <h3>Deleting is reversible</h3>
+          <p>Files go to the Trash after a confirmation. Permanent deletion has to be switched on in the config.</p>
+          <h3>A viewer for everything</h3>
+          <p>Text, a hex dump for binary files, and an optional lf-style external previewer, time-boxed and output-capped.</p>
+          <h3>Run programs in place</h3>
+          <p>Enter on an executable opens a prefilled command line in the current folder. <kbd>Ctrl</kbd>+<kbd>O</kbd> shows the terminal.</p>
+        </div>
+        <div>
+          <h3>Your keys, your config</h3>
+          <p>Every binding is data in <code>~/.config/bifold/config.toml</code>, shared by both front ends. <kbd>h</kbd> opens a help screen generated from your live keymap.</p>
+          <h3>The config file stays yours</h3>
+          <p>Bifold edits it in place and writes only what changed. Comments, unknown keys and ordering survive, and a file that does not parse is never overwritten.</p>
+          <h3>Tab completion in every prompt</h3>
+          <p>Paths and commands complete in all text inputs, in both front ends.</p>
+          <h3>Themes</h3>
+          <p>nord, gruvbox, solarized, light variants and the terminal's own colours, plus your own theme files.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="keys">
+      <h2>Keys</h2>
+      <p class="sub">Defaults for the terminal UI; all rebindable.</p>
+      <table class="keys">
+        <tr><td><kbd>Tab</kbd></td><td>switch pane</td><td><kbd>F5</kbd></td><td>copy to the other pane</td></tr>
+        <tr><td><kbd>↑</kbd> <kbd>↓</kbd> / <kbd>j</kbd> <kbd>k</kbd></td><td>move</td><td><kbd>F6</kbd></td><td>move to the other pane</td></tr>
+        <tr><td><kbd>Enter</kbd> / <kbd>⌫</kbd></td><td>open / parent folder</td><td><kbd>F7</kbd></td><td>new folder</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>mark a file</td><td><kbd>F8</kbd></td><td>delete (to the Trash)</td></tr>
+        <tr><td><kbd>F3</kbd> / <kbd>F4</kbd></td><td>view / hex view</td><td><kbd>/</kbd></td><td>filter with <code>*</code> and <code>?</code></td></tr>
+        <tr><td><kbd>s</kbd> / <kbd>o</kbd></td><td>cycle sort / reverse</td><td><kbd>t</kbd></td><td>cycle theme</td></tr>
+        <tr><td><kbd>.</kbd></td><td>show hidden files</td><td><kbd>h</kbd></td><td>help</td></tr>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <span>Bifold is a <a href="https://github.com/lab18net">Lab18</a> project by Andrey Abramov. MIT licence.</span>
+    <span class="grow"></span>
+    <a href="https://github.com/lab18net/bifold">Source</a>
+    <a href="https://github.com/lab18net/homebrew-tap">Homebrew tap</a>
+    <a href="https://github.com/lab18net/bifold/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://github.com/lab18net/bifold/releases">Releases</a>
+  </footer>
+</div>
+
+<script src="screens.js"></script>
+<script>
+(function () {
+  var THEMES = {
+    "nord": ["#2e3440", "#d8dee9"], "gruvbox": ["#282828", "#d5c4a1"],
+    "solarized": ["#002b36", "#839496"], "gruvbox-light": ["#fbf1c7", "#504945"],
+    "solarized-light": ["#fdf6e3", "#657b83"], "terminal": ["#0c0c0c", "#d0d0d0"]
+  };
+  var screens = window.SCREENS || {};
+  var term = document.getElementById("term"), pre = document.getElementById("screen");
+  var chips = document.querySelector(".chips");
+  function show(name) {
+    if (!screens[name]) return;
+    pre.innerHTML = screens[name];
+    term.style.setProperty("--term-bg", THEMES[name][0]);
+    term.style.setProperty("--term-fg", THEMES[name][1]);
+    chips.querySelectorAll("button").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.theme === name ? "true" : "false");
+    });
+  }
+  Object.keys(THEMES).forEach(function (name) {
+    if (!screens[name]) return;
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = name; b.dataset.theme = name;
+    b.addEventListener("click", function () { show(name); });
+    chips.appendChild(b);
+  });
+  show("nord");
+
+  document.querySelectorAll("button[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = document.querySelector(btn.dataset.copy).textContent;
+      var done = function () {
+        btn.textContent = "Copied"; btn.classList.add("done");
+        setTimeout(function () { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
+      };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+})();
+</script>
+</body>
+</html>

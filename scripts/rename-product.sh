@@ -40,7 +40,7 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
 
 LIST=$(git ls-files -co --exclude-standard \
   | grep -Ev '^(target/|Cargo.lock$)' \
-  | grep -E '\.(rs|md|toml|sh|ya?ml|1)$|\.rb\.in$|(^|/)Makefile$' \
+  | grep -E '\.(rs|md|toml|sh|ya?ml|html|py|1)$|\.rb\.in$|(^|/)Makefile$' \
   | grep -v '^docs/naming.md$' || true)   # keeps the naming history intact
 
 if [[ -z "$LIST" ]]; then

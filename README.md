@@ -6,7 +6,7 @@ A two-panel file manager in the classic commander tradition — the left pane is
 where you are, the right pane is where you are going — with two front ends that
 share one core: a full-screen TUI and a native desktop window.
 
-A project of **Andrey Abramov Consulting** (Lab18).
+A project of **Andrey Abramov Consulting** (Lab18). Website: <https://lab18net.github.io/bifold/>.
 
 ```
 ╭─ LEFT  ~/src/bifold ────────────╮┌─ RIGHT  ~/Downloads ───────────┐

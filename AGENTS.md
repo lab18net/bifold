@@ -15,8 +15,10 @@ docs/decisions/       ADRs (Context → Decision → Consequences)
 docs/PLAN.md          milestones
 docs/naming.md        product-name candidates + collision notes
 scripts/              release.sh, update-formula.sh, check-release-metadata.sh,
-                      changelog-section.sh, rename-product.sh
+                      changelog-section.sh, package-macos.sh, site-screens.py, rename-product.sh
 man/                  bifold.1, bifold-gui.1 (every CLI flag must be documented)
+site/                 promo site (GitHub Pages, deployed by .github/workflows/pages.yml);
+                      screens.js is generated from the real TUI by scripts/site-screens.py
 packaging/macos/      Info.plist.in + Bifold.icns for scripts/package-macos.sh (Bifold.app)
 packaging/homebrew/   formula templates (*.rb.in), tap starter files, publishing guide
 CHANGELOG.md          Keep a Changelog; the [Unreleased] section becomes the release notes

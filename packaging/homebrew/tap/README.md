@@ -1,6 +1,7 @@
 # lab18net/homebrew-tap
 
-Homebrew formulae for [Lab18](https://github.com/lab18net) software.
+Homebrew formulae for [Lab18](https://github.com/lab18net) software. Bifold's
+website: <https://lab18net.github.io/bifold/>.
 
 ## Install
 
