@@ -102,6 +102,7 @@ cargo build --release
 | `/` | filter | `g` | go to path |
 | `r` | refresh | `b` / `f` | back / forward |
 | `h` | help (fixed) | `t` | cycle colour theme |
+| `!` | run any command in this folder | | |
 | `q` / `Ctrl+C` | quit | | |
 
 Esc closes dialogs, clears the filter and the selection. Prompts accept
@@ -187,7 +188,7 @@ backspace delete insert up down left right home end pageup pagedown f1`…`f24`
 Actions (`[keys]`): `quit switch_pane up down page_up page_down home end open
 parent back forward toggle_mark mark_all clear_marks view view_hex rename copy
 move mkdir new_file delete toggle_hidden cycle_sort toggle_sort_order filter
-goto refresh help cancel cycle_theme toggle_hints last_output`.
+goto refresh help cancel cycle_theme toggle_hints run_command last_output`.
 Actions (`[viewer_keys]`): `close up down page_up page_down top bottom
 toggle_wrap toggle_hex`.
 
@@ -250,6 +251,21 @@ esac
 pre-filled with `./name` — add arguments, press `Enter` to run, `Esc` to
 cancel. It runs through `sh -c` in the active pane's folder. `F3`/`F4` still
 view the file, and `run_executables = false` makes `Enter` view it as before.
+
+**`!`** (action `run_command`) opens the same run line **empty**, on any entry
+(file, folder or nothing under the cursor), so you can run any program or shell
+line in the active pane's folder: `!` then `make test`, `git status`,
+`ls -l | wc -l`. Tab completes programs from `PATH` and file names. It is always
+available, also when `run_executables = false`. The desktop has the same thing
+as the **Run…** toolbar button.
+
+In the run line **`Up`** brings back the previous command and **`Down`** moves
+forward again, ending at whatever you had typed before pressing `Up`. Typing
+after a recall starts over from the newest command; a command you run again moves
+to the newest slot instead of repeating, and blank lines are not kept. The history
+(500 commands) is shared by both panes and lives only as long as the process:
+it is not written to disk, and never to `config.toml`. `Up`/`Down` are dialog
+keys, like `Tab`, so they are not in `[keys]`.
 
 - **Terminal:** Bifold steps aside and gives the program your real terminal
   (interactive and full-screen programs work, the window can be resized, and
@@ -345,7 +361,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 221 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 234 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

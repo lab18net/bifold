@@ -7,6 +7,14 @@ All notable changes to Bifold are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `Up`/`Down` in the run line recall earlier commands (this session only, both front
+  ends); the history is a core type, `bifold_core::history`.
+- `!` (action `run_command`, and a **Run…** button on the desktop) runs any program or
+  shell line in the current folder, on any entry; Enter on an executable still
+  offers `./name` as before.
+
 ## [0.1.8] - 2026-11-22
 
 ### Added

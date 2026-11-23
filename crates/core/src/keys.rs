@@ -70,6 +70,7 @@ actions! {
         Help => ("help", "Show help"),
         CycleTheme => ("cycle_theme", "Cycle color theme"),
         ToggleHints => ("toggle_hints", "Show / hide the key-hint line"),
+        RunCommand => ("run_command", "Run any command in the current folder"),
         LastOutput => ("last_output", "Show the terminal (desktop: last command output)"),
         Cancel => ("cancel", "Clear marks and filter"),
     }
@@ -302,6 +303,7 @@ impl Keymap {
             ("f6", A::Move),
             ("f7", A::MkDir),
             ("ctrl+n", A::NewFile),
+            ("!", A::RunCommand),
             ("ctrl+o", A::LastOutput),
             ("f8", A::Delete),
             ("delete", A::Delete),

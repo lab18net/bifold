@@ -12,6 +12,7 @@ use bifold_core::error::Result;
 use bifold_core::format::{ellipsis_left, ellipsis_right, human_size, short_time};
 use bifold_core::fsops::{self, DeleteMode};
 use bifold_core::help::{self, HelpLine};
+use bifold_core::history::Recall;
 use bifold_core::job::Phase;
 use bifold_core::keys::{Action, Key, KeySpec, ViewerAction};
 use bifold_core::preview::{Preview, PreviewKind};
@@ -351,6 +352,10 @@ struct GuiApp {
     /// the text it produced (the list is shown only while the text is unchanged).
     completer: Completer,
     tab_view: Option<(String, Tab)>,
+    /// Up/Down through earlier commands in the run dialog, and the text the last
+    /// recall put in the field (any other text means the user edited it).
+    recall: Recall,
+    recall_text: String,
     help: bool,
     help_tab: usize,
     /// The toolbar filter box has keyboard focus: let it have the keys.
@@ -371,6 +376,8 @@ impl GuiApp {
             dialog: None,
             running: None,
             completer: Completer::default(),
+            recall: Recall::default(),
+            recall_text: String::new(),
             tab_view: None,
             viewer: None,
             help: false,
@@ -493,6 +500,13 @@ impl GuiApp {
                 .clicked()
             {
                 self.begin_delete();
+            }
+            if ui
+                .add_enabled(self.running.is_none(), egui::Button::new("Run…").small())
+                .on_hover_text("! — run any command in this folder")
+                .clicked()
+            {
+                self.run_action(ui.ctx(), Action::RunCommand);
             }
             if ui
                 .add_enabled(!busy, egui::Button::new("View").small())
@@ -836,6 +850,9 @@ impl GuiApp {
     fn show_dialog(&mut self, ctx: &egui::Context) {
         let pal = self.pal;
         let Some(mut dialog) = self.dialog.take() else {
+            // No dialog open: the next one starts a fresh walk through the history.
+            self.recall.reset();
+            self.recall_text.clear();
             return;
         };
         let mut submit = false;
@@ -844,6 +861,10 @@ impl GuiApp {
         let cwd = self.session.pane().path.clone();
         let completer = &mut self.completer;
         let tab_view = &mut self.tab_view;
+        let history = &self.session.history;
+        let recall = &mut self.recall;
+        let recall_text = &mut self.recall_text;
+        let recalls = matches!(dialog.kind, DialogKind::Run);
 
         egui::Window::new(title)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -867,7 +888,7 @@ impl GuiApp {
                             egui::EventFilter {
                                 tab: true,
                                 horizontal_arrows: false,
-                                vertical_arrows: false,
+                                vertical_arrows: recalls,
                                 escape: false,
                             },
                         )
@@ -878,6 +899,33 @@ impl GuiApp {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
                         )
                     });
+                    // Up/Down recall earlier commands in the run line: fixed dialog keys.
+                    let (up, down) = if recalls {
+                        ui.input_mut(|i| {
+                            (
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                            )
+                        })
+                    } else {
+                        (false, false)
+                    };
+                    let mut recalled = false;
+                    if up || down {
+                        if dialog.text != *recall_text {
+                            recall.reset(); // typed since the last recall
+                        }
+                        let found = if up {
+                            recall.older(history, &dialog.text)
+                        } else {
+                            recall.newer(history, &dialog.text)
+                        };
+                        if let Some(text) = found {
+                            dialog.text = text.clone();
+                            *recall_text = text;
+                            recalled = true;
+                        }
+                    }
                     let tabbed = back || forward;
                     if tabbed && let Some(kind) = dialog.kind.input_kind() {
                         let result = completer.tab(kind, &dialog.text, &cwd, back);
@@ -890,7 +938,7 @@ impl GuiApp {
                         .id(input_id)
                         .desired_width(f32::INFINITY)
                         .show(ui);
-                    if tabbed {
+                    if tabbed || recalled {
                         // The cursor belongs at the end of what was just filled in.
                         let end = egui::text::CCursor::new(dialog.text.chars().count());
                         output
@@ -975,6 +1023,7 @@ impl GuiApp {
                         "command cannot be empty",
                     ))
                 } else {
+                    self.session.history.push(&value);
                     self.start_command(value)
                 }
             }
@@ -1342,6 +1391,12 @@ impl GuiApp {
             Action::View => self.view_cursor(false),
             Action::ViewHex => self.view_cursor(true),
             Action::LastOutput => self.show_last_output(),
+            Action::RunCommand => {
+                self.dialog = Some(Dialog {
+                    kind: DialogKind::Run,
+                    text: String::new(),
+                })
+            }
             Action::Rename => self.begin_rename(),
             Action::Copy => self.begin_transfer(DialogKind::CopyTo),
             Action::Move => self.begin_transfer(DialogKind::MoveTo),
@@ -2034,6 +2089,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn the_run_key_runs_any_program_in_the_current_folder() {
+        let (dir, mut app) = script_fixture();
+        let ctx = egui::Context::default();
+        app.run_action(&ctx, Action::RunCommand);
+        let dialog = app.dialog.clone().expect("run dialog");
+        assert!(matches!(dialog.kind, DialogKind::Run));
+        assert_eq!(dialog.text, "", "an empty line, not tied to the cursor");
+
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "pwd; echo arbitrary".into(),
+        });
+        wait_for_command(&mut app);
+        let lines = app.viewer.as_ref().expect("output").preview.plain_lines();
+        let here = fs::canonicalize(dir.path().join("left")).unwrap();
+        assert_eq!(lines[0], here.display().to_string());
+        assert_eq!(lines[1], "arbitrary");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn enter_on_an_executable_opens_a_run_dialog_and_shows_the_output() {
         let (_dir, mut app) = script_fixture();
         app.open_cursor();
@@ -2221,6 +2297,60 @@ mod tests {
 
     fn dialog_text(app: &GuiApp) -> String {
         app.dialog.as_ref().expect("dialog still open").text.clone()
+    }
+
+    #[test]
+    fn up_and_down_recall_earlier_commands_in_the_run_dialog() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::Run, "");
+        for c in ["make test", "git status", "ls -l"] {
+            app.session.history.push(c);
+        }
+        let (up, down) = (egui::Key::ArrowUp, egui::Key::ArrowDown);
+        let none = egui::Modifiers::NONE;
+        press(&ctx, &mut app, up, none);
+        assert_eq!(dialog_text(&app), "ls -l");
+        press(&ctx, &mut app, up, none);
+        assert_eq!(dialog_text(&app), "git status");
+        press(&ctx, &mut app, down, none);
+        assert_eq!(dialog_text(&app), "ls -l");
+        press(&ctx, &mut app, down, none);
+        assert_eq!(dialog_text(&app), "", "back to what was typed");
+        assert_eq!(
+            app.session.active, LEFT,
+            "arrows do not move the file cursor"
+        );
+        assert!(app.dialog.is_some());
+    }
+
+    #[test]
+    fn recall_starts_over_after_the_text_is_edited_and_other_dialogs_ignore_arrows() {
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::Run, "");
+        app.session.history.push("one");
+        app.session.history.push("two");
+        let none = egui::Modifiers::NONE;
+        press(&ctx, &mut app, egui::Key::ArrowUp, none);
+        press(&ctx, &mut app, egui::Key::ArrowUp, none);
+        assert_eq!(dialog_text(&app), "one");
+        app.dialog.as_mut().unwrap().text = "one --flag".into(); // typed
+        press(&ctx, &mut app, egui::Key::ArrowUp, none);
+        assert_eq!(dialog_text(&app), "two", "restarts from the newest");
+
+        let (_dir, mut app, ctx) = completion_dialog(DialogKind::GoTo, "src");
+        app.session.history.push("one");
+        press(&ctx, &mut app, egui::Key::ArrowUp, none);
+        assert_eq!(dialog_text(&app), "src", "only the run line has history");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_submitted_command_is_remembered() {
+        let (_dir, mut app) = script_fixture();
+        app.submit_dialog(Dialog {
+            kind: DialogKind::Run,
+            text: "  echo hi  ".into(),
+        });
+        wait_for_command(&mut app);
+        assert_eq!(app.session.history.entries(), ["echo hi"]);
     }
 
     #[test]

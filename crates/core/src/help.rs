@@ -111,9 +111,9 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
         key(map, &[A::Rename], 1, "rename"),
         key(
             map,
-            &[A::LastOutput],
+            &[A::RunCommand, A::LastOutput],
             1,
-            "show the terminal (desktop: last output)",
+            "run a command here / show the terminal (desktop: last output)",
         ),
         heading("Look"),
         key(
@@ -155,7 +155,9 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
             "Mark entries to act on several at once; without marks, actions use the entry under the cursor.",
         ),
         heading("Running programs"),
-        note("Enter on an executable shows an editable run line; Enter runs it here."),
+        note(
+            "Enter on an executable shows an editable run line; ! opens an empty one. Up/Down recall commands.",
+        ),
         heading("Safety"),
         note(
             "Delete moves to the trash (~/.Trash, or $BIFOLD_TRASH_DIR). Set delete_mode = \"permanent\" to really delete.",

@@ -6,6 +6,7 @@ use bifold_core::complete::{Completer, InputKind, Tab};
 use bifold_core::error::Result;
 use bifold_core::fsops::{self, DeleteMode};
 use bifold_core::help;
+use bifold_core::history::Recall;
 use bifold_core::keys::{Action, Key, KeySpec, ViewerAction};
 use bifold_core::preview::{Preview, PreviewKind};
 use bifold_core::session::Session;
@@ -66,6 +67,8 @@ pub struct Prompt {
     /// Tab completion state, and what the last Tab press has to show.
     pub completer: Completer,
     pub tab: Tab,
+    /// Up/Down through earlier commands (the run line only).
+    pub recall: Recall,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +188,7 @@ impl App {
             Action::View => self.open_viewer(false),
             Action::ViewHex => self.open_viewer(true),
             Action::LastOutput => self.show_terminal(),
+            Action::RunCommand => self.prompt(PromptKind::Run, Some(String::new())),
             Action::Rename => self.prompt(PromptKind::Rename, None),
             Action::Copy => self.prompt(PromptKind::CopyTo, None),
             Action::Move => self.prompt(PromptKind::MoveTo, None),
@@ -224,22 +228,40 @@ impl App {
                         .tab(prompt.kind.input_kind(), &prompt.value, &cwd, backwards);
                 if let Some(text) = result.text.clone() {
                     prompt.value = text;
+                    prompt.recall.reset();
                 }
                 prompt.tab = result;
                 Mode::Prompt(prompt)
             }
+            // Up/Down recall earlier commands in the run line: dialog keys, fixed.
+            KeyCode::Up | KeyCode::Down if prompt.kind == PromptKind::Run => {
+                let history = &self.session.history;
+                let recalled = if key.code == KeyCode::Up {
+                    prompt.recall.older(history, &prompt.value)
+                } else {
+                    prompt.recall.newer(history, &prompt.value)
+                };
+                if let Some(text) = recalled {
+                    prompt.value = text;
+                    prompt.tab = Tab::default();
+                }
+                Mode::Prompt(prompt)
+            }
             KeyCode::Backspace => {
                 prompt.value.pop();
+                prompt.recall.reset();
                 prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
             KeyCode::Char('u') if ctrl => {
                 prompt.value.clear();
+                prompt.recall.reset();
                 prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
             KeyCode::Char(ch) if !ctrl => {
                 prompt.value.push(ch);
+                prompt.recall.reset();
                 prompt.tab = Tab::default();
                 Mode::Prompt(prompt)
             }
@@ -387,6 +409,7 @@ impl App {
             title,
             completer: Completer::default(),
             tab: Tab::default(),
+            recall: Recall::default(),
         })
     }
 
@@ -413,6 +436,7 @@ impl App {
                 if value.is_empty() {
                     return self.fail("command cannot be empty");
                 }
+                self.session.history.push(&value);
                 self.pending_run = Some((value, self.session.pane().path.clone()));
                 Ok(())
             }
@@ -938,6 +962,77 @@ mod tests {
         let (command, cwd) = app.pending_run.take().expect("queued for the event loop");
         assert_eq!(command, "./run.sh --fast");
         assert_eq!(cwd, fs::canonicalize(dir.path().join("left")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_run_key_opens_an_empty_line_for_any_program() {
+        // `run_executables = false` only silences the Enter suggestion; the key
+        // is always there, and works on a plain file or a folder.
+        let (dir, mut app) = exec_fixture(bifold_core::config::Config {
+            run_executables: false,
+            ..Default::default()
+        });
+        cursor_to(&mut app, "notes.txt");
+        app.on_key(key(KeyCode::Char('!')));
+        match &app.mode {
+            Mode::Prompt(prompt) => {
+                assert_eq!(prompt.kind, PromptKind::Run);
+                assert_eq!(prompt.value, "");
+            }
+            other => panic!("expected the run line, got {other:?}"),
+        }
+        for ch in "ls -l | wc -l".chars() {
+            app.on_key(key(KeyCode::Char(ch)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        let (command, cwd) = app.pending_run.take().expect("queued for the event loop");
+        assert_eq!(command, "ls -l | wc -l");
+        assert_eq!(cwd, fs::canonicalize(dir.path().join("left")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn up_and_down_recall_earlier_commands_in_the_run_line() {
+        let (_dir, mut app) = exec_fixture(Default::default());
+        for command in ["echo one", "echo two"] {
+            app.on_key(key(KeyCode::Char('!')));
+            for ch in command.chars() {
+                app.on_key(key(KeyCode::Char(ch)));
+            }
+            app.on_key(key(KeyCode::Enter));
+            assert_eq!(app.pending_run.take().unwrap().0, command);
+        }
+        assert_eq!(app.session.history.entries(), ["echo one", "echo two"]);
+
+        app.on_key(key(KeyCode::Char('!')));
+        app.on_key(key(KeyCode::Char('e'))); // half-typed
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(prompt_value(&app), "echo two");
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(prompt_value(&app), "echo one");
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(prompt_value(&app), "echo one", "already the oldest");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(prompt_value(&app), "echo two");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(prompt_value(&app), "e", "the half-typed text comes back");
+
+        // Edit a recalled command, then run it: it becomes the newest entry.
+        app.on_key(key(KeyCode::Up));
+        app.on_key(key(KeyCode::Char('!')));
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.pending_run.take().unwrap().0, "echo two!");
+        assert_eq!(app.session.history.entries().last().unwrap(), "echo two!");
+    }
+
+    #[test]
+    fn up_and_down_do_nothing_special_in_other_prompts() {
+        let (_dir, mut app) = fixture();
+        app.session.history.push("echo one");
+        app.on_key(key(KeyCode::Char('g')));
+        app.on_key(key(KeyCode::Up));
+        assert!(!prompt_value(&app).contains("echo one"));
     }
 
     #[cfg(unix)]

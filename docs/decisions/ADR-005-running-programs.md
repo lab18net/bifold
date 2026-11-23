@@ -47,3 +47,21 @@ program wants to use, the desktop one has none.
 - The desktop cannot kill a detached command; it is reaped when it ends.
 - Unix only for now (`sh`, execute bits). On other platforms `is_executable`
   is false and Enter keeps opening the viewer.
+
+## Amendment: running something that is not under the cursor
+
+Enter on an executable only covers files that are executable and selected. To
+run anything else (`make test`, `git status`, a pipeline) the action
+`run_command`, default key `!` (button **Run…** on the desktop), opens the same
+run line **empty**. It uses the same prompt, completion, `sh -c`, working
+directory and output handling as above, so there is one code path per front
+end. It is not gated by `run_executables`: that setting only controls the Enter
+suggestion, while `!` is an explicit request.
+
+**History.** `Up`/`Down` in the run line walk through earlier commands
+(`core::history`: `History` in the session, `Recall` per prompt, so both front
+ends behave the same). They are dialog keys, fixed like Tab, because the keymap
+covers the panes, not text fields. History is in memory only: persisting it would
+add a file the user did not ask for, and the config file is off limits (invariant 13).
+If it is wanted across runs, it belongs in a separate state file, written only when
+`persist` is on.

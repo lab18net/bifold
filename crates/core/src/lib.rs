@@ -12,6 +12,7 @@ pub mod filter;
 pub mod format;
 pub mod fsops;
 pub mod help;
+pub mod history;
 pub mod job;
 pub mod keys;
 pub mod pane;

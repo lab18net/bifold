@@ -43,6 +43,8 @@ pub struct Session {
     pub message: Option<String>,
     /// The last command run from the file list, with its output (`Ctrl+O`).
     pub last_run: Option<crate::runcmd::RunOutcome>,
+    /// Commands typed into the run line, for Up/Down recall (this process only).
+    pub history: crate::history::History,
     /// The settings as they were when the session started; `save_config` writes
     /// only what differs from this.
     saved_view: ViewSettings,
@@ -71,6 +73,7 @@ impl Session {
             themes_dir,
             message: (!warnings.is_empty()).then(|| format!("config: {}", warnings.join("; "))),
             last_run: None,
+            history: Default::default(),
             saved_view: ViewSettings::default(),
         };
         session.apply_preferences();
