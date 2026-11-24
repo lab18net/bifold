@@ -102,7 +102,7 @@ cargo build --release
 | `/` | filter | `g` | go to path |
 | `r` | refresh | `b` / `f` | back / forward |
 | `h` | help (fixed) | `t` | cycle colour theme |
-| `!` | run any command in this folder | | |
+| `!` | run any command in this folder | `e` | edit the file in your editor |
 | `q` / `Ctrl+C` | quit | | |
 
 Esc closes dialogs, clears the filter and the selection. Prompts accept
@@ -144,7 +144,8 @@ sort_desc = false
 dirs_first = true
 delete_mode = "trash"  # trash | permanent
 confirm_delete = true
-editor = ""
+editor = ""           # terminal editor for `e`; empty = $VISUAL, $EDITOR, then vi
+gui_editor = ""       # desktop editor for `e`; empty = the system's text editor
 show_permissions = false
 show_hints = true      # the key-hint line at the bottom of the terminal UI (H toggles)
 theme = "bifold"       # see Themes below
@@ -188,7 +189,7 @@ backspace delete insert up down left right home end pageup pagedown f1`…`f24`
 Actions (`[keys]`): `quit switch_pane up down page_up page_down home end open
 parent back forward toggle_mark mark_all clear_marks view view_hex rename copy
 move mkdir new_file delete toggle_hidden cycle_sort toggle_sort_order filter
-goto refresh help cancel cycle_theme toggle_hints run_command last_output`.
+goto refresh help cancel cycle_theme toggle_hints run_command edit last_output`.
 Actions (`[viewer_keys]`): `close up down page_up page_down top bottom
 toggle_wrap toggle_hex`.
 
@@ -212,6 +213,25 @@ grows to their common prefix and the candidates are listed; `Tab` again, with
 nothing left to add, cycles through them. Hidden entries are offered only after
 you type a dot, `~` expands to your home folder, and paths may be absolute or
 relative to the active folder (`../` included). Typing anything ends the cycle.
+
+### Editing files
+
+`e` (action `edit`) opens the file under the cursor in your editor, with the
+active pane's folder as the working directory; folders are refused.
+
+- **Terminal:** the editor gets your real terminal (so `hx`, `vim`, `nano` work),
+  and when it exits normally Bifold is back at once with both panes reloaded. If
+  it fails, the error stays on screen until you press `Enter`. The editor is the
+  `editor` setting, else `$VISUAL`, else `$EDITOR`, else `vi`; it may carry
+  arguments (`editor = "vim -p"`).
+- **Desktop:** there is no terminal to give it, so a terminal editor cannot run
+  there. It uses `gui_editor` (`"code"`, `"subl"`, …) or, when that is empty, the
+  system's text editor (`open -t` on macOS, `xdg-open` elsewhere). The window shows
+  nothing on success and the output on failure. The **Edit** toolbar button does
+  the same.
+
+The file name is passed as one shell word, quoted, and a name starting with `-`
+gets a `./` so it cannot be read as an option.
 
 ### Viewer and previewer
 
@@ -361,7 +381,7 @@ Naming candidates and their collision checks: [docs/naming.md](docs/naming.md).
 ## Tests
 
 ```bash
-cargo test --workspace      # 234 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
+cargo test --workspace      # 243 tests: core behaviour, themes, help, command runner, previewer subprocess, TUI keys + rendered colours, headless egui
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 ```

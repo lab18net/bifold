@@ -43,6 +43,7 @@ KEYS (defaults — rebind in [keys] / [viewer_keys] of ~/.config/bifold/config.t
     Tab switch pane          Enter / → enter directory or view file
     ↑ ↓ move cursor          ← / Backspace go up
     Space mark item          F2 rename      F3 view      F4 hex view   F5 copy
+    e edit in your editor ($VISUAL, $EDITOR or `editor` in the config)
     F6 move                  F7 new folder  F8 delete
     Ctrl+A mark all          Ctrl+D clear marks
     . hidden files           s sort key     o sort order
@@ -195,6 +196,9 @@ fn event_loop(guard: &mut TerminalGuard, app: &mut App) -> io::Result<()> {
         if let Some((command, cwd)) = app.pending_run.take() {
             run_in_terminal(guard, app, &command, &cwd)?;
         }
+        if let Some((command, cwd)) = app.pending_edit.take() {
+            edit_in_terminal(guard, app, &command, &cwd)?;
+        }
         if std::mem::take(&mut app.show_terminal) {
             show_terminal(guard)?;
         }
@@ -258,6 +262,41 @@ fn run_in_terminal(
     return_to_ui(guard, &note)?;
     app.session.reload_all();
     app.set_message(format!("{message}  (Ctrl+O shows the terminal)"));
+    Ok(())
+}
+
+/// Open the file in the user's editor: the editor gets the terminal, and when it
+/// exits normally Bifold comes straight back (no "press Enter"); a failure is
+/// shown first so its message can be read.
+fn edit_in_terminal(
+    guard: &mut TerminalGuard,
+    app: &mut App,
+    command: &str,
+    cwd: &Path,
+) -> io::Result<()> {
+    leave_ui()?;
+    match runcmd::run_inherited(command, cwd) {
+        Ok(Some(0)) => {
+            enter_ui(guard)?;
+            app.set_message(format!("edited: {command}"));
+        }
+        Ok(Some(code)) => {
+            println!("$ {command}");
+            return_to_ui(guard, &format!("editor exit {code}"))?;
+            app.set_message(format!("{command} — exit {code}"));
+        }
+        Ok(None) => {
+            println!("$ {command}");
+            return_to_ui(guard, "editor killed by a signal")?;
+            app.set_message(format!("{command} — killed by a signal"));
+        }
+        Err(err) => {
+            println!("$ {command}");
+            return_to_ui(guard, &format!("error: {err}"))?;
+            app.set_message(format!("error: {err}"));
+        }
+    }
+    app.session.reload_all();
     Ok(())
 }
 

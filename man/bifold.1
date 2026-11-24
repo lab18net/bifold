@@ -89,6 +89,17 @@ Copy / move to the other pane.
 .BR F7 ", " F8
 New folder; delete (to the trash).
 .TP
+.B e
+Edit the file under the cursor: the
+.B editor
+setting, else
+.BR $VISUAL ,
+else
+.BR $EDITOR ,
+else
+.BR vi (1),
+runs on the terminal in the active pane's folder, and Bifold returns when it exits.
+.TP
 .B Ctrl+N
 New file.
 .TP

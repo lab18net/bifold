@@ -58,6 +58,15 @@ directory and output handling as above, so there is one code path per front
 end. It is not gated by `run_executables`: that setting only controls the Enter
 suggestion, while `!` is an explicit request.
 
+**Editing.** `edit` (default `e`) builds `<editor> <file>` in core
+(`Session::edit_command`, `runcmd::resolve_editor`/`edit_line`) and the front ends
+run it the way they run any command, so quoting and the working directory are
+shared. The terminal UI hands over the terminal and returns without a "press Enter"
+when the editor exits 0; the desktop has no terminal, so it has its own setting
+(`gui_editor`, default the system text editor) and keeps the output window for
+failures only. The `editor` field existed in the config from the start but nothing
+read it.
+
 **History.** `Up`/`Down` in the run line walk through earlier commands
 (`core::history`: `History` in the session, `Recall` per prompt, so both front
 ends behave the same). They are dialog keys, fixed like Tab, because the keymap

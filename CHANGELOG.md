@@ -9,6 +9,9 @@ All notable changes to Bifold are recorded here. The format follows
 
 ### Added
 
+- `e` (action `edit`, **Edit** button on the desktop) opens the file under the cursor in
+  your editor. Terminal UI: the `editor` setting, `$VISUAL`, `$EDITOR`, then `vi`, on
+  the real terminal; desktop: new `gui_editor` setting, else the system's text editor.
 - `Up`/`Down` in the run line recall earlier commands (this session only, both front
   ends); the history is a core type, `bifold_core::history`.
 - `!` (action `run_command`, and a **Run…** button on the desktop) runs any program or

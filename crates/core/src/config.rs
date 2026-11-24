@@ -50,8 +50,12 @@ pub struct Config {
     /// `trash` | `permanent`
     pub delete_mode: String,
     pub confirm_delete: bool,
-    /// Opened by the "edit" action; empty means `$EDITOR` or `vi`.
+    /// Terminal editor for the "edit" action (`hx`, `vim -p`, …); empty means
+    /// `$VISUAL`, then `$EDITOR`, then `vi`. The terminal UI gives it the terminal.
     pub editor: String,
+    /// What the desktop app runs for "edit" (no terminal there): a GUI editor such
+    /// as `code` or `subl`; empty means the system's default text editor.
+    pub gui_editor: String,
     pub show_permissions: bool,
     /// The key-hint line at the bottom of the terminal front end.
     pub show_hints: bool,
@@ -92,6 +96,7 @@ impl Default for Config {
             delete_mode: "trash".to_string(),
             confirm_delete: true,
             editor: String::new(),
+            gui_editor: String::new(),
             show_permissions: false,
             show_hints: true,
             previewer: String::new(),

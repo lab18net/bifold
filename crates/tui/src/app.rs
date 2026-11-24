@@ -117,6 +117,9 @@ pub struct App {
     /// A command the user confirmed in the run prompt. The event loop owns the
     /// terminal, so it takes this, suspends the UI and runs it.
     pub pending_run: Option<(String, PathBuf)>,
+    /// An editor command for the file under the cursor, taken by the event loop
+    /// like `pending_run`, but it returns as soon as the editor exits.
+    pub pending_edit: Option<(String, PathBuf)>,
     /// Ctrl+O: the event loop should switch to the real terminal.
     pub show_terminal: bool,
 }
@@ -130,6 +133,7 @@ impl App {
             viewport: [20, 20],
             persist: false,
             pending_run: None,
+            pending_edit: None,
             show_terminal: false,
         }
     }
@@ -190,6 +194,15 @@ impl App {
             Action::LastOutput => self.show_terminal(),
             Action::RunCommand => self.prompt(PromptKind::Run, Some(String::new())),
             Action::Rename => self.prompt(PromptKind::Rename, None),
+            Action::Edit => {
+                match self.session.edit_command(false) {
+                    Ok(command) => {
+                        self.pending_edit = Some((command, self.session.pane().path.clone()));
+                    }
+                    Err(err) => self.set_message(format!("error: {err}")),
+                }
+                Mode::Normal
+            }
             Action::Copy => self.prompt(PromptKind::CopyTo, None),
             Action::Move => self.prompt(PromptKind::MoveTo, None),
             Action::MkDir => self.prompt(PromptKind::MkDir, None),
@@ -962,6 +975,44 @@ mod tests {
         let (command, cwd) = app.pending_run.take().expect("queued for the event loop");
         assert_eq!(command, "./run.sh --fast");
         assert_eq!(cwd, fs::canonicalize(dir.path().join("left")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_edit_key_queues_the_editor_for_the_file_under_the_cursor() {
+        let (dir, mut app) = exec_fixture(bifold_core::config::Config {
+            editor: "myed --wait".into(),
+            ..Default::default()
+        });
+        cursor_to(&mut app, "my tool.sh");
+        app.on_key(key(KeyCode::Char('e')));
+        assert!(matches!(app.mode, Mode::Normal), "no prompt: it just opens");
+        let (command, cwd) = app.pending_edit.take().expect("queued for the event loop");
+        assert_eq!(command, "myed --wait 'my tool.sh'");
+        assert_eq!(cwd, fs::canonicalize(dir.path().join("left")).unwrap());
+        assert!(app.pending_run.is_none());
+    }
+
+    #[test]
+    fn the_edit_key_refuses_a_folder() {
+        let (dir, mut app) = fixture();
+        fs::create_dir(dir.path().join("left/sub")).unwrap();
+        app.session.reload_all();
+        let at = app
+            .session
+            .pane()
+            .entries
+            .iter()
+            .position(|e| e.name == "sub")
+            .unwrap();
+        app.session.pane_mut().cursor = at;
+        app.on_key(key(KeyCode::Char('e')));
+        assert!(app.pending_edit.is_none());
+        assert!(
+            app.session.status().contains("folder"),
+            "{}",
+            app.session.status()
+        );
     }
 
     #[cfg(unix)]

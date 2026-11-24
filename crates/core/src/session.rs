@@ -143,6 +143,42 @@ impl Session {
         ))
     }
 
+    /// The command line that opens the file under the cursor in an editor, to
+    /// run in the active folder. `gui` picks the desktop editor (no terminal
+    /// there) instead of the terminal one. Reads `$VISUAL` / `$EDITOR`.
+    pub fn edit_command(&self, gui: bool) -> Result<String> {
+        let visual = std::env::var("VISUAL").ok();
+        let editor = std::env::var("EDITOR").ok();
+        self.edit_command_with(gui, visual.as_deref(), editor.as_deref())
+    }
+
+    /// [`Session::edit_command`] with the environment passed in (tests).
+    pub fn edit_command_with(
+        &self,
+        gui: bool,
+        visual: Option<&str>,
+        editor_env: Option<&str>,
+    ) -> Result<String> {
+        let entry = self
+            .pane()
+            .cursor_entry()
+            .ok_or_else(|| Error::invalid("nothing to edit"))?;
+        if entry.is_dir() {
+            return Err(Error::invalid("cannot edit a folder"));
+        }
+        let editor = if gui {
+            let configured = self.config.gui_editor.trim();
+            if configured.is_empty() {
+                crate::runcmd::default_gui_editor().to_string()
+            } else {
+                configured.to_string()
+            }
+        } else {
+            crate::runcmd::resolve_editor(&self.config.editor, visual, editor_env)
+        };
+        Ok(crate::runcmd::edit_line(&editor, &entry.name))
+    }
+
     pub fn run_suggestion(&self) -> Option<String> {
         if !self.config.run_executables {
             return None;
@@ -823,6 +859,56 @@ mod tests {
             "{}",
             session.status()
         );
+    }
+
+    #[test]
+    fn edit_command_targets_the_file_under_the_cursor() {
+        let dir = fixture();
+        let left = dir.path().join("left");
+        fs::write(left.join("my notes.md"), "x").unwrap();
+        fs::create_dir(left.join("zdir")).unwrap();
+        let mut session = Session::new_at(&left, &dir.path().join("right"));
+        let at = |s: &Session, name: &str| {
+            s.pane()
+                .entries
+                .iter()
+                .position(|e| e.name == name)
+                .unwrap()
+        };
+
+        session.pane_mut().cursor = at(&session, "my notes.md");
+        // terminal editor: setting > $VISUAL > $EDITOR > vi
+        assert_eq!(
+            session.edit_command_with(false, None, None).unwrap(),
+            "vi 'my notes.md'"
+        );
+        assert_eq!(
+            session
+                .edit_command_with(false, Some("nano"), Some("vim"))
+                .unwrap(),
+            "nano 'my notes.md'"
+        );
+        session.config.editor = "hx".into();
+        assert_eq!(
+            session
+                .edit_command_with(false, Some("nano"), None)
+                .unwrap(),
+            "hx 'my notes.md'"
+        );
+        // the desktop never uses the terminal editor
+        assert_eq!(
+            session.edit_command_with(true, None, None).unwrap(),
+            format!("{} 'my notes.md'", crate::runcmd::default_gui_editor())
+        );
+        session.config.gui_editor = "code -g".into();
+        assert_eq!(
+            session.edit_command_with(true, None, None).unwrap(),
+            "code -g 'my notes.md'"
+        );
+
+        session.pane_mut().cursor = at(&session, "zdir");
+        let err = session.edit_command_with(false, None, None).unwrap_err();
+        assert!(err.to_string().contains("folder"), "{err}");
     }
 
     #[cfg(unix)]

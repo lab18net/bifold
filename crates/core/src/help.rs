@@ -108,7 +108,12 @@ pub fn pages(map: &Keymap, ctx: &HelpContext) -> Vec<HelpPage> {
         key(map, &[A::Copy, A::Move], 1, "copy / move to the other pane"),
         key(map, &[A::Delete], 1, "delete (to the trash)"),
         key(map, &[A::MkDir, A::NewFile], 1, "new folder / new file"),
-        key(map, &[A::Rename], 1, "rename"),
+        key(
+            map,
+            &[A::Rename, A::Edit],
+            1,
+            "rename / edit in your editor",
+        ),
         key(
             map,
             &[A::RunCommand, A::LastOutput],

@@ -297,6 +297,9 @@ impl DialogKind {
 
 struct RunningCommand {
     result: Receiver<bifold_core::error::Result<bifold_core::runcmd::RunOutcome>>,
+    /// Started by the edit action: a clean exit (or an editor that keeps running)
+    /// is not worth a window full of output.
+    edit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -493,6 +496,13 @@ impl GuiApp {
                     kind: DialogKind::NewFile,
                     text: String::new(),
                 });
+            }
+            if ui
+                .add_enabled(self.running.is_none(), egui::Button::new("Edit").small())
+                .on_hover_text("e — open in your editor (gui_editor in the config)")
+                .clicked()
+            {
+                self.begin_edit();
             }
             if ui
                 .add_enabled(!busy, egui::Button::new("Delete").small())
@@ -1039,6 +1049,10 @@ impl GuiApp {
     /// Run `command` in the active folder on a worker thread, so the window
     /// stays responsive; `poll_running` picks the result up.
     fn start_command(&mut self, command: String) -> bifold_core::error::Result<()> {
+        self.launch(command, false)
+    }
+
+    fn launch(&mut self, command: String, edit: bool) -> bifold_core::error::Result<()> {
         if self.running.is_some() {
             return Err(bifold_core::error::Error::invalid(
                 "a command is already running",
@@ -1052,7 +1066,7 @@ impl GuiApp {
             let _ = tx.send(bifold_core::runcmd::run_captured(&cmd, &dir, timeout));
         });
         self.session.message = Some(format!("running: {command}"));
-        self.running = Some(RunningCommand { result: rx });
+        self.running = Some(RunningCommand { result: rx, edit });
         Ok(())
     }
 
@@ -1070,8 +1084,13 @@ impl GuiApp {
                 "the command runner stopped unexpectedly",
             )),
         };
+        let edit = running.edit;
         self.running = None;
         match outcome {
+            Ok(out) if edit && (out.succeeded() || out.detached) => {
+                self.session.message = Some(format!("edit: {}", out.command));
+                self.session.last_run = Some(out);
+            }
             Ok(out) => {
                 self.session.message = Some(out.summary());
                 self.session.last_run = Some(out);
@@ -1281,6 +1300,18 @@ impl GuiApp {
         });
     }
 
+    /// Open the file under the cursor in the desktop editor (`gui_editor`, else the
+    /// system default). A terminal editor needs the terminal UI.
+    fn begin_edit(&mut self) {
+        let result = self
+            .session
+            .edit_command(true)
+            .and_then(|command| self.launch(command, true));
+        if let Err(err) = result {
+            self.session.message = Some(format!("error: {err}"));
+        }
+    }
+
     fn begin_delete(&mut self) {
         let targets = self.session.pane().targets();
         if targets.is_empty() {
@@ -1398,6 +1429,7 @@ impl GuiApp {
                 })
             }
             Action::Rename => self.begin_rename(),
+            Action::Edit => self.begin_edit(),
             Action::Copy => self.begin_transfer(DialogKind::CopyTo),
             Action::Move => self.begin_transfer(DialogKind::MoveTo),
             Action::Delete => self.begin_delete(),
@@ -2085,6 +2117,61 @@ mod tests {
             app.poll_running(&ctx);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[cfg(unix)]
+    fn edit_fixture(gui_editor: &str) -> (tempfile::TempDir, GuiApp) {
+        let (dir, mut app) = script_fixture();
+        app.session.config.gui_editor = gui_editor.into();
+        (dir, app)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_runs_the_gui_editor_quietly_when_it_succeeds() {
+        // `echo` stands in for an editor that opens its own window and exits 0.
+        let (_dir, mut app) = edit_fixture("echo opened");
+        let ctx = egui::Context::default();
+        app.run_action(&ctx, Action::Edit);
+        assert!(app.running.is_some(), "runs in the background");
+        wait_for_command(&mut app);
+        assert!(app.viewer.is_none(), "no output window for a clean exit");
+        let last = app.session.last_run.as_ref().unwrap();
+        assert_eq!(last.command, "echo opened hello.sh");
+        assert!(app.session.status().starts_with("edit:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edit_shows_the_output_when_the_editor_fails() {
+        let (_dir, mut app) = edit_fixture("sh -c 'echo no display >&2; exit 3' sh");
+        let ctx = egui::Context::default();
+        app.run_action(&ctx, Action::Edit);
+        wait_for_command(&mut app);
+        let viewer = app.viewer.as_ref().expect("the failure is shown");
+        assert!(
+            viewer
+                .preview
+                .plain_lines()
+                .join("\n")
+                .contains("no display")
+        );
+    }
+
+    #[test]
+    fn edit_on_a_folder_is_an_error_not_a_launch() {
+        let (dir, mut app) = fixture();
+        fs::create_dir(dir.path().join("left/zz")).unwrap();
+        app.session.reload_all();
+        app.session.panes[LEFT].cursor = app.session.panes[LEFT]
+            .entries
+            .iter()
+            .position(|e| e.name == "zz")
+            .unwrap();
+        let ctx = egui::Context::default();
+        app.run_action(&ctx, Action::Edit);
+        assert!(app.running.is_none());
+        assert!(app.session.status().contains("folder"));
     }
 
     #[cfg(unix)]

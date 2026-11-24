@@ -36,6 +36,54 @@ pub fn command_for(name: &str) -> String {
     }
 }
 
+/// One word for `sh`: unchanged when it only has safe characters, otherwise
+/// single-quoted (embedded quotes escaped).
+pub fn quote_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '_' | '-' | '+' | ',' | '@' | '%' | ':' | '=' | '/')
+        });
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+/// The terminal editor to use: the `editor` setting, else `$VISUAL`, else
+/// `$EDITOR`, else `vi`. Blank values count as unset.
+pub fn resolve_editor(configured: &str, visual: Option<&str>, editor_env: Option<&str>) -> String {
+    [Some(configured), visual, editor_env]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("vi")
+        .to_string()
+}
+
+/// What the desktop app uses when `gui_editor` is empty: the system's default
+/// text editor / handler.
+pub fn default_gui_editor() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open -t"
+    } else {
+        "xdg-open"
+    }
+}
+
+/// `editor` followed by the file name as a single shell word. A name starting
+/// with `-` gets `./` so the editor cannot read it as an option.
+pub fn edit_line(editor: &str, name: &str) -> String {
+    let arg = if name.starts_with('-') {
+        format!("./{name}")
+    } else {
+        name.to_string()
+    };
+    format!("{} {}", editor.trim(), quote_word(&arg))
+}
+
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
     pub command: String,
@@ -190,6 +238,31 @@ pub fn run_captured(command: &str, cwd: &Path, timeout: Duration) -> Result<RunO
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_is_the_setting_then_visual_then_editor_then_vi() {
+        assert_eq!(resolve_editor("hx", Some("nano"), Some("vim")), "hx");
+        assert_eq!(resolve_editor("  ", Some("nano"), Some("vim")), "nano");
+        assert_eq!(resolve_editor("", None, Some("vim -p")), "vim -p");
+        assert_eq!(resolve_editor("", Some(""), Some(" ")), "vi");
+        assert_eq!(resolve_editor("", None, None), "vi");
+    }
+
+    #[test]
+    fn the_edit_line_quotes_the_name_and_guards_option_lookalikes() {
+        assert_eq!(edit_line("hx", "main.rs"), "hx main.rs");
+        assert_eq!(edit_line(" vim -p ", "my file.txt"), "vim -p 'my file.txt'");
+        assert_eq!(edit_line("hx", "it's.md"), "hx 'it'\\''s.md'");
+        assert_eq!(edit_line("hx", "-rf"), "hx ./-rf");
+        assert_eq!(edit_line("hx", "$(touch x).txt"), "hx '$(touch x).txt'");
+    }
+
+    #[test]
+    fn quote_word_leaves_safe_words_alone() {
+        assert_eq!(quote_word("a/b-c_1.txt"), "a/b-c_1.txt");
+        assert_eq!(quote_word(""), "''");
+        assert_eq!(quote_word("a b"), "'a b'");
+    }
 
     #[test]
     fn suggests_a_quoted_relative_command() {
